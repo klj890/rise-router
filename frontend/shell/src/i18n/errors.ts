@@ -24,7 +24,8 @@ const I18NEXT_RESERVED = new Set([
 ])
 
 export function translateError(err: ApiErrorBody | undefined): string {
-  if (!err?.code) return i18n.t('errors:UNKNOWN')
+  // 无 code 时回落到后端原始 message（若有），再退到 UNKNOWN。
+  if (!err?.code) return err?.message || i18n.t('errors:UNKNOWN')
   const safeParams: Record<string, unknown> = {}
   for (const [k, v] of Object.entries(err.params ?? {})) {
     if (!I18NEXT_RESERVED.has(k)) safeParams[k] = v

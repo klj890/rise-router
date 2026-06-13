@@ -1,7 +1,16 @@
+import { useMemo } from 'react'
 import { Card, Col, Row, Tag, Typography, Alert, theme } from 'antd'
 import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { api } from '../api/client'
+
+// 后端 /readyz 的 db 状态 → i18n key（未知值回落显示原始串）。
+const DB_STATUS_KEY: Record<string, string> = {
+  up: 'up',
+  not_connected: 'notConnected',
+  unreachable: 'unreachable',
+  '...': 'loading',
+}
 
 const { Title, Text } = Typography
 
@@ -61,12 +70,13 @@ export default function DashboardPage() {
 
   const backendUp = ready.isSuccess
   const dbState = ready.data?.db ?? (ready.isError ? 'unreachable' : '...')
-  // 整数指标用 numberFmt；货币金额用 balanceFmt 保留两位小数
-  const numberFmt = new Intl.NumberFormat(i18n.language)
-  const balanceFmt = new Intl.NumberFormat(i18n.language, {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })
+  const dbLabel = DB_STATUS_KEY[dbState] ? t(`common:dbStatus.${DB_STATUS_KEY[dbState]}`) : dbState
+  // 整数指标用 numberFmt；货币金额用 balanceFmt 保留两位小数；按 locale 缓存格式化器。
+  const numberFmt = useMemo(() => new Intl.NumberFormat(i18n.language), [i18n.language])
+  const balanceFmt = useMemo(
+    () => new Intl.NumberFormat(i18n.language, { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+    [i18n.language],
+  )
 
   return (
     <div>
@@ -113,7 +123,7 @@ export default function DashboardPage() {
               {t('common:dashboard.database')}
             </Text>
             <div style={{ marginTop: 12 }}>
-              <Tag color={dbState === 'up' ? 'success' : 'warning'}>{dbState}</Tag>
+              <Tag color={dbState === 'up' ? 'success' : 'warning'}>{dbLabel}</Tag>
             </div>
           </Card>
         </Col>

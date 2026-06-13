@@ -23,6 +23,12 @@
     "ready": "就绪",
     "degraded": "降级"
   },
+  "dbStatus": {
+    "up": "正常",
+    "notConnected": "未连接",
+    "unreachable": "不可达",
+    "loading": "加载中"
+  },
   "dashboard": {
     "title": "概览",
     "scaffoldHint": "M0 脚手架：前端 Shell 已联通后端健康检查。",

@@ -23,6 +23,12 @@
     "ready": "Ready",
     "degraded": "Degraded"
   },
+  "dbStatus": {
+    "up": "Up",
+    "notConnected": "Not connected",
+    "unreachable": "Unreachable",
+    "loading": "Loading"
+  },
   "dashboard": {
     "title": "Overview",
     "scaffoldHint": "M0 scaffold: the frontend shell is connected to the backend health check.",
