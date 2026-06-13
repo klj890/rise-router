@@ -102,6 +102,8 @@ async fn chat_completions(
                     continue;
                 }
                 let code = StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+                // 先取上游 Content-Type（bytes() 会消费 resp）
+                let content_type = resp.headers().get(header::CONTENT_TYPE).cloned();
                 // 读 body 失败时尚未向客户端写任何东西，可安全转移到下一渠道
                 let bytes = match resp.bytes().await {
                     Ok(b) => b,
@@ -110,10 +112,14 @@ async fn chat_completions(
                         continue;
                     }
                 };
-                // 透传上游状态 + body
-                return Ok(
-                    (code, [(header::CONTENT_TYPE, "application/json")], bytes).into_response()
+                // 透传上游状态 + Content-Type（非 JSON 错误响应也能让客户端正确处理）
+                let mut out_headers = HeaderMap::new();
+                out_headers.insert(
+                    header::CONTENT_TYPE,
+                    content_type
+                        .unwrap_or_else(|| header::HeaderValue::from_static("application/json")),
                 );
+                return Ok((code, out_headers, bytes).into_response());
             }
             Err(e) => {
                 tracing::warn!(channel = %channel.name, error = %e, "upstream error, failover");
