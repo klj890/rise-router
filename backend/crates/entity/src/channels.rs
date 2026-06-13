@@ -2,7 +2,10 @@
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel, Serialize, Deserialize)]
+/// 持久化实体。**禁止直接用作 API 请求/响应 DTO**——它携带 `credentials` 密钥。
+/// 故意不派生 serde：渠道 CRUD 接口须定义专用 DTO（响应 DTO 不含 credentials；
+/// 更新 DTO 用 `Option<Json>`，仅 `Some` 时改库），避免密钥泄露与空值覆盖。
+#[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
 #[sea_orm(table_name = "channels")]
 pub struct Model {
     #[sea_orm(primary_key)]
@@ -11,9 +14,7 @@ pub struct Model {
     /// 协议族：openai_compatible / anthropic / gemini / task_*
     pub protocol_adapter: String,
     pub base_url: String,
-    /// 密钥/多 key 轮询配置（加密留待后续，现存 jsonb）。
-    /// skip_serializing：凭据绝不随 Model 进 API 响应/日志（防泄露），但仍可从请求体反序列化（创建/更新渠道）。
-    #[serde(skip_serializing)]
+    /// 密钥/多 key 轮询配置（加密留待后续，现存 jsonb）
     pub credentials: Json,
     /// 协议族内消化厂商 quirk 的配置开关
     pub adapter_config: Option<Json>,
