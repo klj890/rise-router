@@ -1,0 +1,47 @@
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--rr-bg-layout);
+  color: var(--rr-text);
+  font-family: var(--rr-font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  transition:
+    background-color 0.2s ease,
+    color 0.2s ease;
+}
+
+/* 等宽数字工具类：用于金额、用量等数据列，避免数字跳动 */
+.rr-num {
+  font-family: var(--rr-font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 克制的自定义滚动条 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--rr-border) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--rr-border);
+  border-radius: 8px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--rr-text-tertiary);
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}

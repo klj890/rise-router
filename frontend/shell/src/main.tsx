@@ -1,20 +1,30 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
-import { ConfigProvider } from 'antd'
-import zhCN from 'antd/locale/zh_CN'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { RouterProvider } from 'react-router-dom'
+// 自托管字体（不依赖 Google Fonts CDN）
+import '@fontsource/inter/400.css'
+import '@fontsource/inter/500.css'
+import '@fontsource/inter/600.css'
+import '@fontsource/jetbrains-mono/400.css'
+import '@fontsource/jetbrains-mono/500.css'
+import './styles/tokens.css'
+import './styles/global.css'
+import { ThemeProvider } from './theme/ThemeProvider'
+import { loadBranding } from './theme/branding'
 import { router } from './router'
 
 const queryClient = new QueryClient()
 
+// 异步拉取 per-租户白标，不阻塞首屏（后端未就绪时静默回落）
+void loadBranding()
+
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    {/* 企业主题基线：CITIC 深蓝主色（与工作区设计规范一致） */}
-    <ConfigProvider locale={zhCN} theme={{ token: { colorPrimary: '#1a3a6e' } }}>
+    <ThemeProvider>
       <QueryClientProvider client={queryClient}>
         <RouterProvider router={router} />
       </QueryClientProvider>
-    </ConfigProvider>
+    </ThemeProvider>
   </React.StrictMode>,
 )

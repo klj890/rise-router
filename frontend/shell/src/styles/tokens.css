@@ -1,0 +1,36 @@
+/* --rr-* CSS 变量兜底值（首屏 JS 执行前避免闪烁；运行时由 applyCssVars 覆盖）。
+   默认暗色，与 store 默认一致。 */
+:root {
+  --rr-color-primary: #2ee6c0;
+  --rr-color-success: #1fb57a;
+  --rr-color-warning: #e8a33d;
+  --rr-color-error: #e5484d;
+  --rr-color-info: #4c8df5;
+
+  --rr-bg-layout: #0b0d11;
+  --rr-bg-container: #14171d;
+  --rr-bg-elevated: #1b1f27;
+  --rr-border: rgba(255, 255, 255, 0.08);
+  --rr-border-secondary: rgba(255, 255, 255, 0.05);
+  --rr-text: #e6e9ef;
+  --rr-text-secondary: #9ba3b4;
+  --rr-text-tertiary: #6b7385;
+  --rr-fill: rgba(255, 255, 255, 0.04);
+
+  --rr-font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Microsoft YaHei', sans-serif;
+  --rr-font-mono: 'JetBrains Mono', 'SFMono-Regular', Menlo, Consolas, monospace;
+}
+
+:root[data-theme='light'] {
+  --rr-bg-layout: #f7f8fa;
+  --rr-bg-container: #ffffff;
+  --rr-bg-elevated: #ffffff;
+  --rr-border: #e6e8ec;
+  --rr-border-secondary: #f0f1f3;
+  --rr-text: #1a1d23;
+  --rr-text-secondary: #5b6472;
+  --rr-text-tertiary: #9098a6;
+  --rr-fill: rgba(0, 0, 0, 0.03);
+  --rr-color-primary: #0fb89a;
+}
