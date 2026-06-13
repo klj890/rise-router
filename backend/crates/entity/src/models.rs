@@ -1,6 +1,5 @@
 //! 模型能力目录（定价五要素②·纯能力，无价格）。display_name 用 i18n JSONB。
 use sea_orm::entity::prelude::*;
-use sea_orm::{ConnectionTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel, Serialize, Deserialize)]
