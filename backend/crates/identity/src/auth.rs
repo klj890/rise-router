@@ -5,13 +5,14 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 /// 对原始密钥做 sha256 → 小写 hex。库里只存此哈希，不存明文。
-/// 鉴权热路径：单次预分配 64 字节，避免逐字节 format! 的多次小分配。
+/// 鉴权热路径：查表直转 hex，单次分配、零格式化开销。
 pub fn hash_key(raw: &str) -> String {
-    use std::fmt::Write;
+    const HEX: &[u8; 16] = b"0123456789abcdef";
     let digest = Sha256::digest(raw.as_bytes());
     let mut hex = String::with_capacity(64);
     for b in digest {
-        let _ = write!(hex, "{b:02x}");
+        hex.push(HEX[(b >> 4) as usize] as char);
+        hex.push(HEX[(b & 0xf) as usize] as char);
     }
     hex
 }
