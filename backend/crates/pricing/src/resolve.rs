@@ -4,7 +4,7 @@
 //! 规则可见；改任一要素不联动其余四要素。
 
 use rise_entity::{discounts, prices};
-use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
+use rust_decimal::prelude::ToPrimitive;
 use sea_orm::prelude::{DateTimeWithTimeZone, Decimal};
 use serde::Serialize;
 use serde_json::Value;
@@ -159,11 +159,12 @@ pub fn apply_discounts(
 fn scale_numeric(v: &Value, factor: Decimal) -> Value {
     match v {
         Value::Number(n) => {
-            let val = Decimal::from_f64(n.as_f64().unwrap_or(0.0)).unwrap_or(Decimal::ZERO);
+            // 直接由 JSON 数字的字符串形式解析为 Decimal，全程不经 f64，保绝对精度
+            let val = n.to_string().parse::<Decimal>().unwrap_or(Decimal::ZERO);
             (val * factor)
                 .round_dp(6)
-                .to_f64()
-                .and_then(serde_json::Number::from_f64)
+                .to_string()
+                .parse::<serde_json::Number>()
                 .map(Value::Number)
                 .unwrap_or(Value::Null)
         }
