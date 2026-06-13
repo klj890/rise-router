@@ -66,6 +66,8 @@ fn build_router(state: AppState) -> Router {
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
         .nest("/api", api)
+        // OpenAI 兼容入口挂在根 /v1（relay 转发）
+        .merge(rise_gateway::relay_routes())
         .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive())
         .with_state(state)
