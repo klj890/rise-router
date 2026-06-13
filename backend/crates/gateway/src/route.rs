@@ -34,24 +34,31 @@ pub fn rank_routes(mut candidates: Vec<RouteCandidate>) -> Vec<RouteCandidate> {
 /// 在最高优先级组内按权重选一条；`rand` 取 [0, 总权重) 的值（由调用方注入，便于测试）。
 /// 全部权重为 0 时回落到第一条。无候选返回 None。
 pub fn pick_weighted(candidates: &[RouteCandidate], rand: u64) -> Option<&RouteCandidate> {
-    // O(N) 找最高优先级 + 筛选，避免克隆整组与 O(N log N) 排序（路由热路径）
+    // 全程在 slice 上遍历，零堆分配（路由热路径）
     let top = candidates.iter().map(|c| c.priority).max()?;
-    let group: Vec<&RouteCandidate> = candidates.iter().filter(|c| c.priority == top).collect();
+    let in_top = |c: &&RouteCandidate| c.priority == top;
 
-    let total: u64 = group.iter().map(|c| c.weight.max(0) as u64).sum();
+    let total: u64 = candidates
+        .iter()
+        .filter(in_top)
+        .map(|c| c.weight.max(0) as u64)
+        .sum();
     if total == 0 {
         // 同优先级且权重全 0：取 channel_id 最小的（稳定）
-        return group.iter().min_by_key(|c| c.channel_id).copied();
+        return candidates
+            .iter()
+            .filter(in_top)
+            .min_by_key(|c| c.channel_id);
     }
     let mut acc = 0u64;
     let target = rand % total;
-    for c in &group {
+    for c in candidates.iter().filter(in_top) {
         acc += c.weight.max(0) as u64;
         if target < acc {
             return Some(c);
         }
     }
-    group.last().copied()
+    candidates.iter().rfind(in_top)
 }
 
 #[cfg(test)]
