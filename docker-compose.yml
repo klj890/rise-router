@@ -1,0 +1,45 @@
+# 本地开发基础设施。启动：docker compose up -d
+# 端口避开 8080（微信冲突，全局禁用）。
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: rise-postgres
+    environment:
+      POSTGRES_USER: rise
+      POSTGRES_PASSWORD: rise
+      POSTGRES_DB: rise_router
+    ports:
+      - "5432:5432"
+    volumes:
+      - rise_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rise -d rise_router"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: rise-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - rise_redis:/data
+
+  minio:
+    image: minio/minio:latest
+    container_name: rise-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"  # S3 API
+      - "9001:9001"  # 控制台
+    volumes:
+      - rise_minio:/data
+
+volumes:
+  rise_pg:
+  rise_redis:
+  rise_minio:

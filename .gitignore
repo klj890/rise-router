@@ -1,0 +1,22 @@
+# Rust
+/backend/target/
+**/*.rs.bk
+Cargo.lock.bak
+
+# Node / frontend
+node_modules/
+dist/
+.vite/
+*.local
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# Editor / OS
+.DS_Store
+._*
+.idea/
+.vscode/
+*.log

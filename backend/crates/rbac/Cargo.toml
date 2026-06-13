@@ -1,0 +1,10 @@
+[package]
+name = "rise-rbac"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+axum.workspace = true
+rise-core.workspace = true

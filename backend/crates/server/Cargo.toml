@@ -1,0 +1,31 @@
+[package]
+name = "rise-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "rise-server"
+path = "src/main.rs"
+
+[dependencies]
+tokio.workspace = true
+axum.workspace = true
+tower-http.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+sea-orm.workspace = true
+
+rise-core.workspace = true
+rise-identity.workspace = true
+rise-rbac.workspace = true
+rise-gateway.workspace = true
+rise-pricing.workspace = true
+rise-billing.workspace = true
+rise-task.workspace = true
+rise-report.workspace = true
+rise-crm.workspace = true
+rise-support.workspace = true
