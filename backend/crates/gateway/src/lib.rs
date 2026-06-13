@@ -22,9 +22,7 @@ pub async fn resolve_route(
     db: &DatabaseConnection,
     model_slug: &str,
 ) -> AppResult<Vec<RouteCandidate>> {
-    let model = models::Entity::find()
-        .filter(models::Column::Slug.eq(model_slug))
-        .one(db)
+    let model = models::find_listed_by_slug(db, model_slug)
         .await?
         .ok_or(AppError::NotFound)?;
 
@@ -55,7 +53,8 @@ pub async fn resolve_route(
         })
         .collect();
     if candidates.is_empty() {
-        return Err(AppError::NotFound);
+        // 模型存在（上架）但无健康渠道（全部禁用/熔断）→ 503，区别于"模型不存在"的 404
+        return Err(AppError::Unavailable);
     }
     Ok(rank_routes(candidates))
 }

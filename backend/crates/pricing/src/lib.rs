@@ -25,9 +25,8 @@ pub async fn resolve_price(
     group_slug: Option<&str>,
     at: DateTimeWithTimeZone,
 ) -> AppResult<ResolvedPrice> {
-    let model = models::Entity::find()
-        .filter(models::Column::Slug.eq(model_slug))
-        .one(db)
+    // 计价不限模型状态：下架模型仍需解析历史价格（计费/审计）；新流量由网关路由拦截。
+    let model = models::find_by_slug(db, model_slug)
         .await?
         .ok_or(AppError::NotFound)?;
 

@@ -18,11 +18,37 @@ pub struct Model {
     /// 计费量纲：token / image / second / call
     pub billing_unit: String,
     pub capabilities: Option<Json>,
-    /// 1=上架 2=下架
-    pub status: i16,
+    pub status: ModelStatus,
+}
+
+/// 模型上架状态（强类型，映射 smallint）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "i16", db_type = "SmallInteger")]
+pub enum ModelStatus {
+    #[sea_orm(num_value = 1)]
+    Listed,
+    #[sea_orm(num_value = 2)]
+    Delisted,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {}
 
 impl ActiveModelBehavior for ActiveModel {}
+
+/// 按 slug 查模型（不限状态）。用于历史计费/审计：下架模型仍需解析其历史价格。
+pub async fn find_by_slug<C: ConnectionTrait>(db: &C, slug: &str) -> Result<Option<Model>, DbErr> {
+    Entity::find().filter(Column::Slug.eq(slug)).one(db).await
+}
+
+/// 按 slug 查"上架"模型。用于网关路由：下架模型不接受新流量。
+pub async fn find_listed_by_slug<C: ConnectionTrait>(
+    db: &C,
+    slug: &str,
+) -> Result<Option<Model>, DbErr> {
+    Entity::find()
+        .filter(Column::Slug.eq(slug))
+        .filter(Column::Status.eq(ModelStatus::Listed))
+        .one(db)
+        .await
+}

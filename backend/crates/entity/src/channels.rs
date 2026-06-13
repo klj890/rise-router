@@ -2,7 +2,10 @@
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel, Serialize, Deserialize)]
+/// 持久化实体。**禁止直接用作 API 请求/响应 DTO**——它携带 `credentials` 密钥。
+/// 故意不派生 serde：渠道 CRUD 接口须定义专用 DTO（响应 DTO 不含 credentials；
+/// 更新 DTO 用 `Option<Json>`，仅 `Some` 时改库），避免密钥泄露与空值覆盖。
+#[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
 #[sea_orm(table_name = "channels")]
 pub struct Model {
     #[sea_orm(primary_key)]
