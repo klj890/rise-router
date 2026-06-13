@@ -161,8 +161,9 @@ fn scale_numeric(v: &Value, factor: Decimal) -> Value {
         Value::Number(n) => {
             // 直接由 JSON 数字的字符串形式解析为 Decimal，全程不经 f64，保绝对精度
             let val = n.to_string().parse::<Decimal>().unwrap_or(Decimal::ZERO);
+            // 保留 12 位：单价可能极低（如折后每单位 token 价），6 位会把它截断为 0（变免费）
             (val * factor)
-                .round_dp(6)
+                .round_dp(12)
                 .to_string()
                 .parse::<serde_json::Number>()
                 .map(Value::Number)

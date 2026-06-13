@@ -19,7 +19,8 @@ impl MigrationTrait for Migration {
                     .col(integer_null(Discounts::TargetGroupId))
                     .col(integer_null(Discounts::TargetModelId))
                     .col(string(Discounts::Kind))
-                    .col(decimal_len(Discounts::Value, 10, 4))
+                    // 16,4：percentage（0.9000）足够，fixed 大额企业减免也不溢出
+                    .col(decimal_len(Discounts::Value, 16, 4))
                     .col(boolean(Discounts::Stackable).default(false))
                     .col(integer(Discounts::Priority).default(0))
                     .col(timestamp_with_time_zone(Discounts::ValidFrom))
