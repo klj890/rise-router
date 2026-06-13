@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/core",
+    "crates/entity",
     "crates/identity",
     "crates/rbac",
     "crates/gateway",
@@ -31,6 +32,8 @@ sea-orm = { version = "2.0.0-rc.40", features = [
     "runtime-tokio-rustls",
     "macros",
     "with-chrono",
+    "with-rust_decimal",
+    "with-json",
 ] }
 sea-orm-migration = { version = "2.0.0-rc.40", features = [
     "sqlx-postgres",
@@ -43,9 +46,12 @@ anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 async-trait = "0.1"
+chrono = "0.4"
+rust_decimal = "1"
 
 # internal crates
 rise-core = { path = "crates/core" }
+rise-entity = { path = "crates/entity" }
 rise-identity = { path = "crates/identity" }
 rise-rbac = { path = "crates/rbac" }
 rise-gateway = { path = "crates/gateway" }

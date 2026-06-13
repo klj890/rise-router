@@ -31,7 +31,7 @@ impl MigrationTrait for Migration {
 }
 
 #[derive(DeriveIden)]
-enum Groups {
+pub enum Groups {
     Table,
     Id,
     Slug,
