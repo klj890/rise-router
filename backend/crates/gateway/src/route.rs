@@ -21,7 +21,8 @@ pub struct RouteCandidate {
 
 /// 故障转移顺序：优先级降序，同优先级权重降序，再按 channel_id 升序保证稳定。
 pub fn rank_routes(mut candidates: Vec<RouteCandidate>) -> Vec<RouteCandidate> {
-    candidates.sort_by(|a, b| {
+    // 比较器含 channel_id 兜底，排序完全确定，可用 unstable（无临时分配、更快）
+    candidates.sort_unstable_by(|a, b| {
         b.priority
             .cmp(&a.priority)
             .then(b.weight.cmp(&a.weight))
@@ -33,8 +34,8 @@ pub fn rank_routes(mut candidates: Vec<RouteCandidate>) -> Vec<RouteCandidate> {
 /// 在最高优先级组内按权重选一条；`rand` 取 [0, 总权重) 的值（由调用方注入，便于测试）。
 /// 全部权重为 0 时回落到第一条。无候选返回 None。
 pub fn pick_weighted(candidates: &[RouteCandidate], rand: u64) -> Option<&RouteCandidate> {
-    let ranked = rank_routes(candidates.to_vec());
-    let top = ranked.first()?.priority;
+    // O(N) 找最高优先级 + 筛选，避免克隆整组与 O(N log N) 排序（路由热路径）
+    let top = candidates.iter().map(|c| c.priority).max()?;
     let group: Vec<&RouteCandidate> = candidates.iter().filter(|c| c.priority == top).collect();
 
     let total: u64 = group.iter().map(|c| c.weight.max(0) as u64).sum();

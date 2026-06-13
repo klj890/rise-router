@@ -42,7 +42,7 @@ pub async fn resolve_route(
     let channel_ids: Vec<i32> = mcs.iter().map(|m| m.channel_id).collect();
     let ch_map: HashMap<i32, channels::Model> = channels::Entity::find()
         .filter(channels::Column::Id.is_in(channel_ids))
-        .filter(channels::Column::Status.eq(1_i16))
+        .filter(channels::Column::Status.eq(channels::ChannelStatus::Enabled))
         .all(db)
         .await?
         .into_iter()

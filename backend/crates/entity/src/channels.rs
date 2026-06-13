@@ -17,8 +17,19 @@ pub struct Model {
     pub adapter_config: Option<Json>,
     pub priority: i32,
     pub weight: i32,
-    /// 1=启用 2=手动禁用 3=自动熔断
-    pub status: i16,
+    pub status: ChannelStatus,
+}
+
+/// 渠道状态（强类型，映射 smallint）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "i16", db_type = "SmallInteger")]
+pub enum ChannelStatus {
+    #[sea_orm(num_value = 1)]
+    Enabled,
+    #[sea_orm(num_value = 2)]
+    Disabled,
+    #[sea_orm(num_value = 3)]
+    CircuitBroken,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
