@@ -1,0 +1,43 @@
+{
+  "brand": "Rise Router",
+  "subtitle": "企业级 AI API Router 控制台",
+  "nav": {
+    "overview": "概览",
+    "gateway": "网关与渠道",
+    "pricing": "定价管理",
+    "billing": "财务与计费",
+    "crm": "CRM 与销售",
+    "report": "监控报表",
+    "support": "客服工单",
+    "appearance": "外观设置"
+  },
+  "action": {
+    "logout": "退出登录",
+    "save": "保存",
+    "reset": "重置",
+    "cancel": "取消"
+  },
+  "status": {
+    "online": "在线",
+    "offline": "离线 / 降级",
+    "ready": "就绪",
+    "degraded": "降级"
+  },
+  "dashboard": {
+    "title": "概览",
+    "scaffoldHint": "M0 脚手架：前端 Shell 已联通后端健康检查。",
+    "todayCalls": "今日调用",
+    "balance": "账户余额",
+    "unitYuan": "元",
+    "backend": "后端服务",
+    "database": "数据库",
+    "milestone": "里程碑",
+    "readyzError": "后端 /readyz 不可达或处于 degraded（数据库未连接）"
+  },
+  "user": {
+    "notLoggedIn": "未登录"
+  },
+  "locale": {
+    "switch": "语言"
+  }
+}

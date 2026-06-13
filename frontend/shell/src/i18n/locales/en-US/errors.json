@@ -1,0 +1,8 @@
+{
+  "UNKNOWN": "Request failed",
+  "UNAUTHORIZED": "Unauthorized, please log in again",
+  "FORBIDDEN": "You do not have permission to perform this action",
+  "NOT_FOUND": "Resource not found",
+  "INTERNAL": "Internal server error",
+  "PRICING_NOT_FOUND": "No price found for model {{model}} in group {{group}}"
+}

@@ -1,0 +1,8 @@
+{
+  "UNKNOWN": "请求失败",
+  "UNAUTHORIZED": "未授权，请重新登录",
+  "FORBIDDEN": "没有权限执行该操作",
+  "NOT_FOUND": "未找到资源",
+  "INTERNAL": "服务内部错误",
+  "PRICING_NOT_FOUND": "未找到模型 {{model}} 在分组 {{group}} 的定价"
+}

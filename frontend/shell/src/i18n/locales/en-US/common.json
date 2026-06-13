@@ -1,0 +1,43 @@
+{
+  "brand": "Rise Router",
+  "subtitle": "Enterprise AI API Router Console",
+  "nav": {
+    "overview": "Overview",
+    "gateway": "Gateway & Channels",
+    "pricing": "Pricing",
+    "billing": "Billing",
+    "crm": "CRM & Sales",
+    "report": "Reports",
+    "support": "Support Tickets",
+    "appearance": "Appearance"
+  },
+  "action": {
+    "logout": "Log out",
+    "save": "Save",
+    "reset": "Reset",
+    "cancel": "Cancel"
+  },
+  "status": {
+    "online": "Online",
+    "offline": "Offline / Degraded",
+    "ready": "Ready",
+    "degraded": "Degraded"
+  },
+  "dashboard": {
+    "title": "Overview",
+    "scaffoldHint": "M0 scaffold: the frontend shell is connected to the backend health check.",
+    "todayCalls": "Today's Calls",
+    "balance": "Account Balance",
+    "unitYuan": "CNY",
+    "backend": "Backend Service",
+    "database": "Database",
+    "milestone": "Milestone",
+    "readyzError": "Backend /readyz unreachable or degraded (database not connected)"
+  },
+  "user": {
+    "notLoggedIn": "Not logged in"
+  },
+  "locale": {
+    "switch": "Language"
+  }
+}

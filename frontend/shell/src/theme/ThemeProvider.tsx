@@ -1,6 +1,5 @@
 import { useEffect, useMemo, type ReactNode } from 'react'
 import { App as AntdApp, ConfigProvider } from 'antd'
-import zhCN from 'antd/locale/zh_CN'
 import { useThemeStore } from './store'
 import { buildAntdTheme } from './presets'
 import { applyCssVars } from './applyCssVars'
@@ -20,8 +19,9 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     applyCssVars(resolved, accentId, brand)
   }, [resolved, accentId, brand])
 
+  // 主题挂外层 ConfigProvider；locale 由内层 LocaleProvider 的 ConfigProvider 负责（关注点分离）。
   return (
-    <ConfigProvider locale={zhCN} theme={themeConfig}>
+    <ConfigProvider theme={themeConfig}>
       <AntdApp>{children}</AntdApp>
     </ConfigProvider>
   )
