@@ -61,6 +61,21 @@ frontend/
 
 前端可插拔 = Module Federation 为主（React 插件共享 AntD/主题 token，原生级一致）+ iframe 兜底（异构技术栈第三方）。App Manifest 中 `frontend.entry.type: module | iframe` 二选一。
 
+### 4.1 设计系统与可配置主题
+
+视觉风格 = **克制专业（Restrained Professional，Linear/Vercel 一派）**：低饱和、细边框、极简阴影、强调色克制使用。**暗色优先 + 浅色可切**；signature 主色 **极光青绿 `#2EE6C0`**（浅色加深为 `#0FB89A`）。字体自托管（`@fontsource/inter` + `@fontsource/jetbrains-mono`，不依赖 Google Fonts CDN）；数据列用等宽 + tabular-nums。
+
+主题入口在 `frontend/shell/src/theme/`：
+- `tokens.ts` —— 单一 token 源（暗/浅中性色阶、功能色、字体、圆角）。
+- `presets.ts` —— 强调色预设（aurora/violet/amber/blue）+ `buildAntdTheme(mode, accent, override)` 合成 AntD `{algorithm, token, components}`（含 Card/Menu/Button/Table 克制质感覆盖）。
+- `store.ts` —— Zustand+persist：`mode`(dark/light/system)、`accentId`、`brand`(白标覆盖)。
+- `ThemeProvider.tsx` + `applyCssVars.ts` —— 应用 AntD 主题并把 token 写成 `--rr-*` CSS 变量到 `:root`。
+- `branding.ts` —— `loadBranding()` 从 `/api/branding` 拉 per-租户白标（后端未就绪静默回落）。
+
+**可配置 = 预设切换 + 白标覆盖**：内置 4 强调色 × 暗浅 = 8 组合，Header 一键切换；「外观设置」页（`/settings/appearance`）支持白标（主色/logo/应用名/圆角）实时换肤、localStorage 持久化，并预留后端下发。
+
+**CSS 变量契约**（供 MF 第三方插件继承主题）：`--rr-color-primary`、`--rr-bg-layout`、`--rr-bg-container`、`--rr-bg-elevated`、`--rr-border`、`--rr-text`/`-secondary`/`-tertiary`、`--rr-fill`、`--rr-font-sans`/`-mono`；`:root[data-theme=dark|light]` 标记当前模式。
+
 ## 5. 关键技术组件
 
 | 关注点 | 选型 |
@@ -80,6 +95,7 @@ frontend/
 
 ```
 请求
+ → ⓪ Locale 协商(LocaleLayer): URL?lang > 用户偏好 > 组织默认 > Accept-Language > zh-CN，注入 request 上下文
  → ① 认证: Bearer token 校验 + userinfo 反查缓存(sha256 key, 2min TTL, singleflight 去重, 401/503 区分)
  → ② 两层白名单短路: 免认证(健康检查/公开API) | 免授权(仅校验 token, 跳过权限决策)
  → ③ RBAC: enforce(sub, dom, obj, act)，dom=组织/工作空间 → 天然多租户数据隔离
@@ -88,6 +104,10 @@ frontend/
  → 业务处理 / relay 转发
  → ⑥ 结算 + 审计: usage_logs 结算, audit_logs 记录 HTTP 级调用
 ```
+
+### 6.1 国际化（横切）
+
+全栈 i18n（zh-CN 默认 + en-US，可扩展），四套解耦子系统：UI 文案（i18next 命名空间）/ 内容数据（JSONB `*_i18n`）/ API 错误（code+参数，后端不绑定语言）/ 格式化（`Intl`/CLDR）。可插拔：App Manifest `i18n` 块声明命名空间/错误码/模板，内部域与第三方同套注册（狗粮原则）。完整设计见 **[i18n.md](./i18n.md)**。
 
 ## 7. 部署拓扑
 

@@ -379,6 +379,23 @@
 
 ---
 
+## 10.6 国际化（i18n）数据约定（完整方案见 [i18n.md](./i18n.md)）
+
+全栈 i18n（zh-CN 默认 + en-US）对数据层的约定：
+
+- **locale / timezone 列**：`users.locale VARCHAR(16) NULL`、`users.timezone VARCHAR(64) NULL`；`organizations.default_locale VARCHAR(16) NULL`、`organizations.default_timezone VARCHAR(64) DEFAULT 'Asia/Shanghai'`。协商优先级 URL>用户>组织>Accept-Language>默认。
+- **内容多语言 = JSONB `*_i18n` 字段**（决策：JSONB 本地化字段，非独立译文表）。可翻译的**显示名**改为 `_i18n` 后缀的 JSONB：
+  ```jsonc
+  // models.display_name_i18n / groups.name_i18n / discounts.name_i18n / datasets.name_i18n …
+  { "zh-CN": "企业版", "en-US": "Enterprise" }
+  ```
+  **stable key/slug/code 列保持单语言**（如 `models.slug`、`groups.slug`）——i18n 只覆盖给人看的名字。读 API 按请求 locale 解析为纯串；管理编辑 API 返回完整 JSONB。至少默认 locale（zh-CN）必填。
+- **金额永远 `decimal + 货币码`**（CNY 默认），不存格式化串；时间戳存 UTC `timestamptz`，展示按用户/组织时区；计费"业务日边界"用组织级时区。
+- **通知模板表**：`notification_templates(template_key, locale, channel, subject, body, …)`，按 locale 渲染（minijinja）。
+- **API 错误不建表**：后端 error code 枚举 + 前端 `errors` 命名空间为正源（code + 参数契约）。
+
+---
+
 ## 11. 核心 ER 关系图（定价 + 路由 + 计费主干）
 
 ```mermaid

@@ -20,6 +20,9 @@ rise-router/
     migration/             SeaORM 迁移（含初始 groups 表，验证 up/down）
   frontend/shell/          Vite + React 19 + AntD 6 + TanStack Query + Zustand + react-router
                            登录页(手机号占位) + AppLayout(十域导航) + Dashboard(探测 /readyz)
+    src/theme/             设计系统与可配置主题：tokens/presets/store/ThemeProvider/applyCssVars/branding
+                           克制专业风(Linear 派)·暗色优先·极光青绿#2EE6C0·预设切换+白标(外观设置页)
+                           详见 docs/architecture.md §4.1；主题入口改动从 src/theme/ 起
   docker-compose.yml       PG(5432) / Redis(6379) / MinIO(9000+9001)
   Makefile                 infra-up / be-run / migrate / fe-dev 等
   .github/workflows/ci.yml fmt+clippy+test（后端）+ pnpm build（前端）
@@ -170,6 +173,7 @@ new-api 本质上是一个 to-C 系统，其核心痛点是**倍率体系**（Mo
 - **`docs/architecture.md`** — 系统架构：微内核总览图、后端 crate 切分、前端 Shell 结构、技术组件、网关中间件链、本地兄弟项目借鉴清单。
 - **`docs/roadmap.md`** — 功能清单十域 + 里程碑 M0–M6 + 持续约束（交付顺序：MVP 网关+定价 → 财务 → CRM → 报表 → 可插拔+客服 → 合规）。
 - **`docs/data-model.md`** — 数据模型 ER 蓝图（建表前，详见下节）。
+- **`docs/i18n.md`** — 国际化架构：全栈 i18n（zh-CN 默认+en-US）；UI 文案/内容数据/API 错误/格式化四套解耦；内容用 JSONB `*_i18n` 字段；API 错误走 code+参数（后端不绑定语言）；locale 协商 LocaleLayer；可插拔译文随 App Manifest。
 - **`docs/README.md`** — 文档索引。
 
 **同栈参考实现**：`~/claude_project/billing-report/agent-console/`（Rust axum + React/AntD/Zustand）已实现多角色财务控制台、对账、多级缓存、xlsx 导出、邮件 cron，是 M1–M2 的首要范本。其他借鉴见 `docs/architecture.md` 第 8 节。
