@@ -2071,6 +2071,10 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "rise-core",
+ "rise-entity",
+ "sea-orm",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
