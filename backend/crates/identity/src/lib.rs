@@ -66,11 +66,13 @@ async fn whoami(State(state): State<AppState>, headers: HeaderMap) -> AppResult<
     Ok(Json(ctx))
 }
 
-/// 从 Authorization 头解析 Bearer 原始令牌。
+/// 从 Authorization 头解析 Bearer 原始令牌。方案名大小写不敏感（RFC 7235）。
 fn bearer(headers: &HeaderMap) -> Option<&str> {
-    headers
-        .get(AUTHORIZATION)?
-        .to_str()
-        .ok()?
-        .strip_prefix("Bearer ")
+    let val = headers.get(AUTHORIZATION)?.to_str().ok()?;
+    // get(..7) 非 panic：长度不足或非字符边界返回 None
+    if val.get(..7)?.eq_ignore_ascii_case("bearer ") {
+        Some(&val[7..])
+    } else {
+        None
+    }
 }

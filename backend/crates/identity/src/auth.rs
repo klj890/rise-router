@@ -5,11 +5,15 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 /// 对原始密钥做 sha256 → 小写 hex。库里只存此哈希，不存明文。
+/// 鉴权热路径：单次预分配 64 字节，避免逐字节 format! 的多次小分配。
 pub fn hash_key(raw: &str) -> String {
-    Sha256::digest(raw.as_bytes())
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
+    use std::fmt::Write;
+    let digest = Sha256::digest(raw.as_bytes());
+    let mut hex = String::with_capacity(64);
+    for b in digest {
+        let _ = write!(hex, "{b:02x}");
+    }
+    hex
 }
 
 /// 密钥被拒原因（由 verify_key 映射到 HTTP 状态）。
