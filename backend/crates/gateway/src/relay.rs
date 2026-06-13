@@ -13,9 +13,11 @@ use axum::{
     routing::post,
     Json, Router,
 };
+use std::collections::HashMap;
+
 use rise_core::{AppError, AppResult, AppState};
 use rise_entity::channels;
-use sea_orm::EntityTrait;
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde_json::Value;
 
 use crate::resolve_route;
@@ -64,13 +66,19 @@ async fn chat_completions(
     // 4. 路由（按故障转移顺序）
     let candidates = resolve_route(db, &model).await?;
 
-    // 5. 失败转移转发：依次尝试候选渠道
+    // 5. 失败转移转发：先批量取候选渠道（1 次查询，避免循环内 N+1），再依次尝试
+    let channel_ids: Vec<i32> = candidates.iter().map(|c| c.channel_id).collect();
+    let channel_map: HashMap<i32, channels::Model> = channels::Entity::find()
+        .filter(channels::Column::Id.is_in(channel_ids))
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|ch| (ch.id, ch))
+        .collect();
+
     let client = http_client();
     for cand in &candidates {
-        let Some(channel) = channels::Entity::find_by_id(cand.channel_id)
-            .one(db)
-            .await?
-        else {
+        let Some(channel) = channel_map.get(&cand.channel_id) else {
             continue;
         };
         let key = channel
