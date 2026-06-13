@@ -17,8 +17,11 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (resp) => resp,
   (error) => {
-    const body = error?.response?.data?.error as ApiErrorBody | undefined
-    if (body) error.localizedMessage = translateError(body)
+    // 统一赋予本地化文案：UI 可无脑展示 error.localizedMessage（无标准错误体时回落 UNKNOWN）。
+    if (error) {
+      const body = error.response?.data?.error as ApiErrorBody | undefined
+      error.localizedMessage = translateError(body)
+    }
     return Promise.reject(error)
   },
 )

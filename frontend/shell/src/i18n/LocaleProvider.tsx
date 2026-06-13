@@ -1,5 +1,5 @@
 import { useEffect, type ReactNode } from 'react'
-import { ConfigProvider } from 'antd'
+import { App as AntdApp, ConfigProvider } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
 import enUS from 'antd/locale/en_US'
 import dayjs from 'dayjs'
@@ -25,5 +25,10 @@ export function LocaleProvider({ children }: { children: ReactNode }) {
     document.documentElement.lang = locale
   }, [locale])
 
-  return <ConfigProvider locale={ANTD_LOCALE[locale]}>{children}</ConfigProvider>
+  // AntdApp 须嵌在带 locale 的 ConfigProvider 内，App.useApp() 静态方法（message/modal/notification）才会跟随语言。
+  return (
+    <ConfigProvider locale={ANTD_LOCALE[locale]}>
+      <AntdApp>{children}</AntdApp>
+    </ConfigProvider>
+  )
 }

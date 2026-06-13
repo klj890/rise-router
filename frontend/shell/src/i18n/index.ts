@@ -1,6 +1,7 @@
 import i18n from 'i18next'
 import { initReactI18next } from 'react-i18next'
-import { DEFAULT_LOCALE, FALLBACK_LOCALE, SUPPORTED_LOCALES } from './config'
+import { FALLBACK_LOCALE, SUPPORTED_LOCALES } from './config'
+import { useLocaleStore } from './store'
 
 import zhCommon from './locales/zh-CN/common.json'
 import zhAuth from './locales/zh-CN/auth.json'
@@ -17,7 +18,8 @@ void i18n.use(initReactI18next).init({
     'zh-CN': { common: zhCommon, auth: zhAuth, errors: zhErrors },
     'en-US': { common: enCommon, auth: enAuth, errors: enErrors },
   },
-  lng: DEFAULT_LOCALE,
+  // 同步采用持久化偏好作为初始语言，避免首屏从默认语言闪烁到目标语言（FOUC）
+  lng: useLocaleStore.getState().locale,
   fallbackLng: FALLBACK_LOCALE,
   supportedLngs: SUPPORTED_LOCALES as unknown as string[],
   ns: NAMESPACES as unknown as string[],

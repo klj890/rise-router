@@ -61,7 +61,12 @@ export default function DashboardPage() {
 
   const backendUp = ready.isSuccess
   const dbState = ready.data?.db ?? (ready.isError ? 'unreachable' : '...')
+  // 整数指标用 numberFmt；货币金额用 balanceFmt 保留两位小数
   const numberFmt = new Intl.NumberFormat(i18n.language)
+  const balanceFmt = new Intl.NumberFormat(i18n.language, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })
 
   return (
     <div>
@@ -86,7 +91,7 @@ export default function DashboardPage() {
         <Col xs={24} sm={12} md={6}>
           <MetricCard
             title={t('common:dashboard.balance')}
-            value={numberFmt.format(8420)}
+            value={balanceFmt.format(8420)}
             suffix={t('common:dashboard.unitYuan')}
           />
         </Col>
