@@ -11,33 +11,36 @@ import {
   BgColorsOutlined,
 } from '@ant-design/icons'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import { useAuthStore } from '../store/auth'
 import { useThemeStore } from '../theme/store'
 import { useResolvedMode } from '../theme/useResolvedMode'
 import ThemeControls from '../components/ThemeControls'
+import LocaleSwitcher from '../components/LocaleSwitcher'
 
 const { Header, Sider, Content } = Layout
-
-// 导航对应数据模型十大域；M0 仅「概览」「外观设置」可达，其余为后续里程碑占位。
-const menuItems = [
-  { key: '/dashboard', icon: <DashboardOutlined />, label: '概览' },
-  { key: '/gateway', icon: <ApiOutlined />, label: '网关与渠道' },
-  { key: '/pricing', icon: <DollarOutlined />, label: '定价管理' },
-  { key: '/billing', icon: <AccountBookOutlined />, label: '财务与计费' },
-  { key: '/crm', icon: <TeamOutlined />, label: 'CRM 与销售' },
-  { key: '/report', icon: <BarChartOutlined />, label: '监控报表' },
-  { key: '/support', icon: <CustomerServiceOutlined />, label: '客服工单' },
-  { key: '/settings/appearance', icon: <BgColorsOutlined />, label: '外观设置' },
-]
 
 export default function AppLayout() {
   const navigate = useNavigate()
   const location = useLocation()
+  const { t } = useTranslation()
   const resolved = useResolvedMode()
   const { token } = theme.useToken()
   const { username, logout } = useAuthStore()
   const brand = useThemeStore((s) => s.brand)
-  const appName = brand.appName ?? 'Rise Router'
+  const appName = brand.appName ?? t('common:brand')
+
+  // 导航对应数据模型十大域；M0 仅「概览」「外观设置」可达，其余为后续里程碑占位。
+  const menuItems = [
+    { key: '/dashboard', icon: <DashboardOutlined />, label: t('common:nav.overview') },
+    { key: '/gateway', icon: <ApiOutlined />, label: t('common:nav.gateway') },
+    { key: '/pricing', icon: <DollarOutlined />, label: t('common:nav.pricing') },
+    { key: '/billing', icon: <AccountBookOutlined />, label: t('common:nav.billing') },
+    { key: '/crm', icon: <TeamOutlined />, label: t('common:nav.crm') },
+    { key: '/report', icon: <BarChartOutlined />, label: t('common:nav.report') },
+    { key: '/support', icon: <CustomerServiceOutlined />, label: t('common:nav.support') },
+    { key: '/settings/appearance', icon: <BgColorsOutlined />, label: t('common:nav.appearance') },
+  ]
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
@@ -94,13 +97,18 @@ export default function AppLayout() {
             paddingInline: 20,
           }}
         >
+          <LocaleSwitcher />
           <ThemeControls />
           <Dropdown
-            menu={{ items: [{ key: 'logout', label: '退出登录', onClick: () => logout() }] }}
+            menu={{
+              items: [
+                { key: 'logout', label: t('common:action.logout'), onClick: () => logout() },
+              ],
+            }}
           >
             <span style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 8 }}>
               <Avatar size="small" icon={<UserOutlined />} />
-              <Typography.Text>{username ?? '未登录'}</Typography.Text>
+              <Typography.Text>{username ?? t('common:user.notLoggedIn')}</Typography.Text>
             </span>
           </Dropdown>
         </Header>

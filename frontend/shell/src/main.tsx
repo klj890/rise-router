@@ -10,7 +10,9 @@ import '@fontsource/jetbrains-mono/400.css'
 import '@fontsource/jetbrains-mono/500.css'
 import './styles/tokens.css'
 import './styles/global.css'
+import './i18n' // 初始化 i18next（须在渲染前）
 import { ThemeProvider } from './theme/ThemeProvider'
+import { LocaleProvider } from './i18n/LocaleProvider'
 import { loadBranding } from './theme/branding'
 import { router } from './router'
 
@@ -22,9 +24,11 @@ void loadBranding()
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <ThemeProvider>
-      <QueryClientProvider client={queryClient}>
-        <RouterProvider router={router} />
-      </QueryClientProvider>
+      <LocaleProvider>
+        <QueryClientProvider client={queryClient}>
+          <RouterProvider router={router} />
+        </QueryClientProvider>
+      </LocaleProvider>
     </ThemeProvider>
   </React.StrictMode>,
 )
