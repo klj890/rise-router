@@ -25,9 +25,7 @@ pub async fn resolve_price(
     group_slug: Option<&str>,
     at: DateTimeWithTimeZone,
 ) -> AppResult<ResolvedPrice> {
-    let model = models::Entity::find()
-        .filter(models::Column::Slug.eq(model_slug))
-        .one(db)
+    let model = models::find_listed_by_slug(db, model_slug)
         .await?
         .ok_or(AppError::NotFound)?;
 

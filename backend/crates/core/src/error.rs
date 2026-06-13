@@ -18,6 +18,9 @@ pub enum AppError {
     Unauthorized,
     #[error("forbidden")]
     Forbidden,
+    /// 资源存在但当前不可用（如模型无健康渠道）——区别于 NotFound，便于重试/告警。
+    #[error("service unavailable")]
+    Unavailable,
     #[error("internal error: {0}")]
     Internal(String),
 }
@@ -29,6 +32,7 @@ impl IntoResponse for AppError {
             AppError::BadRequest(_) => StatusCode::BAD_REQUEST,
             AppError::Unauthorized => StatusCode::UNAUTHORIZED,
             AppError::Forbidden => StatusCode::FORBIDDEN,
+            AppError::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
             AppError::Db(_) | AppError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
         (status, Json(json!({ "error": self.to_string() }))).into_response()
