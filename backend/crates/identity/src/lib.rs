@@ -61,14 +61,15 @@ pub fn routes() -> Router<AppState> {
 
 /// `GET /api/identity/whoami`（Bearer 密钥）—— 校验并回显鉴权上下文（无密钥字段）。
 async fn whoami(State(state): State<AppState>, headers: HeaderMap) -> AppResult<Json<KeyContext>> {
-    let raw = bearer(&headers).ok_or(AppError::Unauthorized)?;
+    let raw = bearer_token(&headers).ok_or(AppError::Unauthorized)?;
     let db = state.db()?;
     let ctx = verify_key(db, raw, chrono::Utc::now().fixed_offset()).await?;
     Ok(Json(ctx))
 }
 
 /// 从 Authorization 头解析 Bearer 原始令牌。方案名大小写不敏感（RFC 7235）。
-fn bearer(headers: &HeaderMap) -> Option<&str> {
+/// 供 relay 等其他域复用，避免重复实现。
+pub fn bearer_token(headers: &HeaderMap) -> Option<&str> {
     let val = headers.get(AUTHORIZATION)?.to_str().ok()?;
     // get(..7) 非 panic：长度不足或非字符边界返回 None
     if val.get(..7)?.eq_ignore_ascii_case("bearer ") {

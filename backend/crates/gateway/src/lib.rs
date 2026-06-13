@@ -3,8 +3,10 @@
 //! 纯函数在 [`route`]（无 DB，单测覆盖）；[`resolve_route`] 是 DB 编排。
 //! 路由与定价完全分离：仅在 `models` 处相交，互不依赖。
 
+mod relay;
 mod route;
 
+pub use relay::relay_routes;
 pub use route::{pick_weighted, rank_routes, RouteCandidate};
 
 use axum::{
