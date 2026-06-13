@@ -102,10 +102,14 @@ async fn chat_completions(
                     continue;
                 }
                 let code = StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
-                let bytes = resp
-                    .bytes()
-                    .await
-                    .map_err(|e| AppError::Internal(e.to_string()))?;
+                // 读 body 失败时尚未向客户端写任何东西，可安全转移到下一渠道
+                let bytes = match resp.bytes().await {
+                    Ok(b) => b,
+                    Err(e) => {
+                        tracing::warn!(channel = %channel.name, error = %e, "read upstream body failed, failover");
+                        continue;
+                    }
+                };
                 // 透传上游状态 + body
                 return Ok(
                     (code, [(header::CONTENT_TYPE, "application/json")], bytes).into_response()
