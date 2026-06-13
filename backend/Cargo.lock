@@ -2082,7 +2082,14 @@ name = "rise-identity"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "chrono",
  "rise-core",
+ "rise-entity",
+ "rust_decimal",
+ "sea-orm",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
 ]
 
 [[package]]

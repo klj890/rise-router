@@ -8,6 +8,8 @@ mod m20260613_000003_create_prices;
 mod m20260613_000004_create_discounts;
 mod m20260613_000005_create_channels;
 mod m20260613_000006_create_model_channels;
+mod m20260613_000007_create_organizations;
+mod m20260613_000008_create_api_keys;
 
 pub struct Migrator;
 
@@ -21,6 +23,8 @@ impl MigratorTrait for Migrator {
             Box::new(m20260613_000004_create_discounts::Migration),
             Box::new(m20260613_000005_create_channels::Migration),
             Box::new(m20260613_000006_create_model_channels::Migration),
+            Box::new(m20260613_000007_create_organizations::Migration),
+            Box::new(m20260613_000008_create_api_keys::Migration),
         ]
     }
 }
