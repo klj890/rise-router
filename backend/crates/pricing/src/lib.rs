@@ -15,7 +15,7 @@ use axum::{
 use rise_core::{AppError, AppResult, AppState};
 use rise_entity::{discounts, groups, models, prices};
 use sea_orm::prelude::DateTimeWithTimeZone;
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
+use sea_orm::{ColumnTrait, Condition, DatabaseConnection, EntityTrait, QueryFilter};
 use serde::Deserialize;
 
 /// 取数后调纯函数解析最终价。
@@ -31,24 +31,71 @@ pub async fn resolve_price(
         .await?
         .ok_or(AppError::NotFound)?;
 
+    // 显式指定但查无此分组 → 报错，不静默回落默认价（避免拼错 slug 却默默按默认价计费）。
     let group = match group_slug {
-        Some(s) => {
+        Some(s) => Some(
             groups::Entity::find()
                 .filter(groups::Column::Slug.eq(s))
                 .one(db)
                 .await?
-        }
+                .ok_or(AppError::NotFound)?,
+        ),
         None => None,
     };
     let group_id = group.as_ref().map(|g| g.id);
 
+    // 在 SQL 中过滤（命中 idx_prices_lookup）：默认价 + 该分组专属价，且当前有效。
+    let group_price_cond = match group_id {
+        Some(g) => Condition::any()
+            .add(prices::Column::GroupId.is_null())
+            .add(prices::Column::GroupId.eq(g)),
+        None => Condition::all().add(prices::Column::GroupId.is_null()),
+    };
     let model_prices = prices::Entity::find()
         .filter(prices::Column::ModelId.eq(model.id))
+        .filter(group_price_cond)
+        .filter(prices::Column::ValidFrom.lte(at))
+        .filter(
+            Condition::any()
+                .add(prices::Column::ValidTo.is_null())
+                .add(prices::Column::ValidTo.gt(at)),
+        )
         .all(db)
         .await?;
     let selected = select_price(&model_prices, group_id, at).ok_or(AppError::NotFound)?;
 
-    let all_discounts = discounts::Entity::find().all(db).await?;
+    // 折扣同样在 SQL 中按有效期 + 适用 scope 过滤，避免热路径全表扫描。
+    let mut scope_cond = Condition::any()
+        .add(discounts::Column::Scope.eq("global"))
+        .add(
+            Condition::all()
+                .add(discounts::Column::Scope.eq("model"))
+                .add(discounts::Column::TargetModelId.eq(model.id)),
+        );
+    if let Some(g) = group_id {
+        scope_cond = scope_cond
+            .add(
+                Condition::all()
+                    .add(discounts::Column::Scope.eq("group"))
+                    .add(discounts::Column::TargetGroupId.eq(g)),
+            )
+            .add(
+                Condition::all()
+                    .add(discounts::Column::Scope.eq("model_group"))
+                    .add(discounts::Column::TargetModelId.eq(model.id))
+                    .add(discounts::Column::TargetGroupId.eq(g)),
+            );
+    }
+    let all_discounts = discounts::Entity::find()
+        .filter(discounts::Column::ValidFrom.lte(at))
+        .filter(
+            Condition::any()
+                .add(discounts::Column::ValidTo.is_null())
+                .add(discounts::Column::ValidTo.gt(at)),
+        )
+        .filter(scope_cond)
+        .all(db)
+        .await?;
     let (final_unit_prices, discount_factor, applied_discounts) =
         apply_discounts(selected, &all_discounts, model.id, group_id, at);
 

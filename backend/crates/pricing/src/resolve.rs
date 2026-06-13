@@ -4,7 +4,7 @@
 //! 规则可见；改任一要素不联动其余四要素。
 
 use rise_entity::{discounts, prices};
-use rust_decimal::prelude::ToPrimitive;
+use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
 use sea_orm::prelude::{DateTimeWithTimeZone, Decimal};
 use serde::Serialize;
 use serde_json::Value;
@@ -111,7 +111,8 @@ pub fn apply_discounts(
         .filter(|d| d.kind == "percentage")
         .collect();
 
-    let mut factor = 1.0_f64;
+    // 折扣系数全程用 Decimal 计算，仅在 API 边界转 f64，避免浮点累积误差（财务对账）。
+    let mut factor = Decimal::ONE;
     let mut applied = Vec::new();
 
     match percentage
@@ -121,7 +122,7 @@ pub fn apply_discounts(
     {
         Some(ns) => {
             // 不可叠加：仅用优先级最高的这一条
-            factor = dec_to_f64(ns.value);
+            factor = ns.value;
             for d in &percentage {
                 applied.push(pct(d, d.id == ns.id));
             }
@@ -129,7 +130,7 @@ pub fn apply_discounts(
         None => {
             // 全部可叠加：相乘
             for d in &percentage {
-                factor *= dec_to_f64(d.value);
+                factor *= d.value;
                 applied.push(pct(d, true));
             }
         }
@@ -145,17 +146,24 @@ pub fn apply_discounts(
         });
     }
 
-    (scale_numeric(&price.unit_prices, factor), factor, applied)
+    (
+        scale_numeric(&price.unit_prices, factor),
+        dec_to_f64(factor),
+        applied,
+    )
 }
 
-/// 递归把 JSON 数值叶子乘以 factor（按比例折扣单价）。
-/// 注：假设数值叶子均为价格（token 类 {input,output,cache_read} 成立）；
-/// 分档结构中若有非价格数值字段，后续按 key 精化（当前 resolution 等为字符串，安全）。
-fn scale_numeric(v: &Value, factor: f64) -> Value {
+/// 递归把 JSON 数值叶子乘以 factor（按比例折扣单价），全程 Decimal 保精度，保留 6 位小数。
+/// 注：假设数值叶子均为价格（token 类 {input,output,cache_read} 成立）；分档结构中若有
+/// 非价格数值字段（如 up_to/min_tokens），后续按 billing_unit 结构精化（当前 resolution 等为字符串，安全）。
+fn scale_numeric(v: &Value, factor: Decimal) -> Value {
     match v {
         Value::Number(n) => {
-            let scaled = (n.as_f64().unwrap_or(0.0) * factor * 1e6).round() / 1e6;
-            serde_json::Number::from_f64(scaled)
+            let val = Decimal::from_f64(n.as_f64().unwrap_or(0.0)).unwrap_or(Decimal::ZERO);
+            (val * factor)
+                .round_dp(6)
+                .to_f64()
+                .and_then(serde_json::Number::from_f64)
                 .map(Value::Number)
                 .unwrap_or(Value::Null)
         }
