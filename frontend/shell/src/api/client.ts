@@ -3,6 +3,13 @@ import { useAuthStore } from '../store/auth'
 import { useLocaleStore } from '../i18n/store'
 import { translateError, type ApiErrorBody } from '../i18n/errors'
 
+// 扩展 AxiosError，使 localizedMessage 类型安全（消费方可直接读取）。
+declare module 'axios' {
+  export interface AxiosError {
+    localizedMessage?: string
+  }
+}
+
 /** 统一 API 客户端；自动附带 Bearer token 与 X-Locale。 */
 export const api = axios.create({ baseURL: '/' })
 
