@@ -62,6 +62,16 @@ impl MigrationTrait for Migration {
                     .col(ModelChannels::Enabled)
                     .to_owned(),
             )
+            .await?;
+        // FK ChannelId 索引：PG 不为外键自动建索引，优化级联删除避免全表扫描
+        manager
+            .create_index(
+                Index::create()
+                    .name("idx_model_channels_channel_id")
+                    .table(ModelChannels::Table)
+                    .col(ModelChannels::ChannelId)
+                    .to_owned(),
+            )
             .await
     }
 
