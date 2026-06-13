@@ -37,7 +37,12 @@ pub enum Relation {}
 
 impl ActiveModelBehavior for ActiveModel {}
 
-/// 按 slug 查"上架"模型（gateway/pricing 共用，去重并统一过滤下架模型）。
+/// 按 slug 查模型（不限状态）。用于历史计费/审计：下架模型仍需解析其历史价格。
+pub async fn find_by_slug<C: ConnectionTrait>(db: &C, slug: &str) -> Result<Option<Model>, DbErr> {
+    Entity::find().filter(Column::Slug.eq(slug)).one(db).await
+}
+
+/// 按 slug 查"上架"模型。用于网关路由：下架模型不接受新流量。
 pub async fn find_listed_by_slug<C: ConnectionTrait>(
     db: &C,
     slug: &str,

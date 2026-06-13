@@ -12,8 +12,8 @@ pub struct Model {
     pub protocol_adapter: String,
     pub base_url: String,
     /// 密钥/多 key 轮询配置（加密留待后续，现存 jsonb）。
-    /// serde(skip)：上游凭据绝不随 Model 序列化进 API 响应/日志，避免密钥泄露。
-    #[serde(skip)]
+    /// skip_serializing：凭据绝不随 Model 进 API 响应/日志（防泄露），但仍可从请求体反序列化（创建/更新渠道）。
+    #[serde(skip_serializing)]
     pub credentials: Json,
     /// 协议族内消化厂商 quirk 的配置开关
     pub adapter_config: Option<Json>,
