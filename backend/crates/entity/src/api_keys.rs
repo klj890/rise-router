@@ -40,17 +40,20 @@ pub enum KeyStatus {
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-pub enum Relation {}
+pub enum Relation {
+    #[sea_orm(
+        belongs_to = "super::organizations::Entity",
+        from = "Column::OrgId",
+        to = "super::organizations::Column::Id",
+        on_delete = "Cascade"
+    )]
+    Organization,
+}
+
+impl Related<super::organizations::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::Organization.def()
+    }
+}
 
 impl ActiveModelBehavior for ActiveModel {}
-
-/// 按 key_hash 查密钥（鉴权热路径，命中唯一索引）。
-pub async fn find_by_key_hash<C: ConnectionTrait>(
-    db: &C,
-    key_hash: &str,
-) -> Result<Option<Model>, DbErr> {
-    Entity::find()
-        .filter(Column::KeyHash.eq(key_hash))
-        .one(db)
-        .await
-}

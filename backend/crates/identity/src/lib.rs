@@ -16,7 +16,7 @@ use axum::{
 use rise_core::{AppError, AppResult, AppState};
 use rise_entity::{api_keys, organizations};
 use sea_orm::prelude::DateTimeWithTimeZone;
-use sea_orm::{DatabaseConnection, EntityTrait};
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 
 /// 校验原始密钥 → KeyContext。失败映射到合适的 HTTP 状态（401/403/429）。
 pub async fn verify_key(
@@ -25,7 +25,11 @@ pub async fn verify_key(
     now: DateTimeWithTimeZone,
 ) -> AppResult<KeyContext> {
     let hash = hash_key(raw_key);
-    let key = api_keys::find_by_key_hash(db, &hash)
+    // 单次 JOIN 取密钥 + 组织，鉴权热路径少一次 RTT。
+    let (key, org) = api_keys::Entity::find()
+        .filter(api_keys::Column::KeyHash.eq(&hash))
+        .find_also_related(organizations::Entity)
+        .one(db)
         .await?
         .ok_or(AppError::Unauthorized)?;
 
@@ -35,10 +39,7 @@ pub async fn verify_key(
         KeyError::Exhausted | KeyError::BudgetExceeded => AppError::QuotaExceeded,
     })?;
 
-    let org = organizations::Entity::find_by_id(key.org_id)
-        .one(db)
-        .await?
-        .ok_or_else(|| AppError::Internal("organization missing for api_key".into()))?;
+    let org = org.ok_or_else(|| AppError::Internal("organization missing for api_key".into()))?;
     if org.status != organizations::OrgStatus::Active {
         return Err(AppError::Forbidden);
     }
@@ -71,7 +72,9 @@ fn bearer(headers: &HeaderMap) -> Option<&str> {
     let val = headers.get(AUTHORIZATION)?.to_str().ok()?;
     // get(..7) 非 panic：长度不足或非字符边界返回 None
     if val.get(..7)?.eq_ignore_ascii_case("bearer ") {
-        Some(&val[7..])
+        // 去空白并拒空，避免 "Bearer " 空 token 触发无意义查询
+        let token = val[7..].trim();
+        (!token.is_empty()).then_some(token)
     } else {
         None
     }

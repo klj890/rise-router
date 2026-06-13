@@ -9,15 +9,23 @@ pub struct Model {
     #[sea_orm(primary_key)]
     pub id: i32,
     pub name: String,
-    /// 1=个人(org-of-one) 2=企业
-    pub org_type: i16,
+    pub org_type: OrgType,
     /// 商业分组（定价档位）；空=按默认价计费（feeds resolve_price 的 group）
     pub group_id: Option<i32>,
     pub status: OrgStatus,
-    /// 实名认证：0=未认证 1=个人已认证 2=企业已认证
-    pub realname_status: i16,
+    pub realname_status: RealnameStatus,
     /// 归属销售（CRM，可空；FK 待 users 表落地后补）
     pub owner_sales_id: Option<i32>,
+}
+
+/// 组织类型（强类型，映射 smallint）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "i16", db_type = "SmallInteger")]
+pub enum OrgType {
+    #[sea_orm(num_value = 1)]
+    Individual,
+    #[sea_orm(num_value = 2)]
+    Enterprise,
 }
 
 /// 组织状态（强类型，映射 smallint）。
@@ -28,6 +36,18 @@ pub enum OrgStatus {
     Active,
     #[sea_orm(num_value = 2)]
     Suspended,
+}
+
+/// 实名认证状态（强类型，映射 smallint）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "i16", db_type = "SmallInteger")]
+pub enum RealnameStatus {
+    #[sea_orm(num_value = 0)]
+    Unverified,
+    #[sea_orm(num_value = 1)]
+    IndividualVerified,
+    #[sea_orm(num_value = 2)]
+    EnterpriseVerified,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
