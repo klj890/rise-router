@@ -21,6 +21,9 @@ pub enum AppError {
     /// 资源存在但当前不可用（如模型无健康渠道）——区别于 NotFound，便于重试/告警。
     #[error("service unavailable")]
     Unavailable,
+    /// 配额/预算耗尽（如密钥预算上限）。
+    #[error("quota exceeded")]
+    QuotaExceeded,
     #[error("internal error: {0}")]
     Internal(String),
 }
@@ -33,6 +36,7 @@ impl IntoResponse for AppError {
             AppError::Unauthorized => StatusCode::UNAUTHORIZED,
             AppError::Forbidden => StatusCode::FORBIDDEN,
             AppError::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
+            AppError::QuotaExceeded => StatusCode::TOO_MANY_REQUESTS,
             AppError::Db(_) | AppError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
         (status, Json(json!({ "error": self.to_string() }))).into_response()
