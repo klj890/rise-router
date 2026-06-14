@@ -169,8 +169,8 @@ fn is_stream_requested(body: &Value) -> bool {
     }
 }
 
-/// 规范化流式请求：stream=true（bool）+ 注入 stream_options.include_usage=true（客户端未显式设置时），
-/// 以便从末块拿 usage 计费。client 已设 include_usage 时尊重其值。
+/// 规范化流式请求：stream=true（bool）+ **强制** stream_options.include_usage=true 以拿末块 usage 计费。
+/// 强制（而非尊重客户端）：客户端若显式设 include_usage=false，上游将不返 usage → 计费被绕过免单。
 fn prepare_stream_body(body: &mut Value) {
     let Some(obj) = body.as_object_mut() else {
         return;
@@ -180,7 +180,8 @@ fn prepare_stream_body(body: &mut Value) {
         .entry("stream_options")
         .or_insert_with(|| Value::Object(Default::default()));
     if let Some(so_obj) = so.as_object_mut() {
-        so_obj.entry("include_usage").or_insert(Value::Bool(true));
+        // 强制覆盖：不接受客户端的 false（否则绕过计费）
+        so_obj.insert("include_usage".into(), Value::Bool(true));
     }
 }
 
@@ -243,8 +244,12 @@ struct SettleGuard {
 
 impl Drop for SettleGuard {
     fn drop(&mut self) {
+        // Drop 中绝不能再 panic：锁中毒（持锁时曾 panic）也优雅恢复，否则双 panic → 进程 abort
         let (quantity, request_id) = {
-            let mut s = self.shared.lock().unwrap();
+            let mut s = self
+                .shared
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             (s.usage.take(), s.request_id.take())
         };
         let Some(quantity) = quantity else {
@@ -301,11 +306,12 @@ fn stream_response(
                     scanner.feed(&bytes, &mut request_id);
                     // 边流边镜像到 shared，供 guard 在任意时刻 Drop 时读取
                     {
-                        let mut s = shared.lock().unwrap();
+                        let mut s = shared.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                         if s.request_id.is_none() {
                             s.request_id.clone_from(&request_id);
                         }
-                        if s.usage.is_none() {
+                        // 始终用最新非空 usage（上游可能在后续块更新更完整用量）
+                        if scanner.usage.is_some() {
                             s.usage.clone_from(&scanner.usage);
                         }
                     }
