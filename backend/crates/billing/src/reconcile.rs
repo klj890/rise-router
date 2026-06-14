@@ -15,9 +15,10 @@ use rise_core::{AppError, AppResult, AppState};
 use rise_entity::reconciliations;
 use rust_decimal::Decimal;
 use sea_orm::prelude::DateTimeWithTimeZone;
+use sea_orm::sea_query::Expr;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder, Set,
-    Statement,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, FromQueryResult, QueryFilter,
+    QueryOrder, Set, Statement,
 };
 use serde::{Deserialize, Serialize};
 
@@ -142,16 +143,34 @@ pub async fn generate(
     let now = Utc::now().fixed_offset();
 
     let model = match existing {
-        // 重算覆盖 draft：刷新营收/调用/明细/生成时间，status 保持 draft，cost/gap 仍 NULL。
+        // 重算覆盖 draft：并发护栏——只在仍为 Draft 时覆盖。若读后被并发 lock，则 WHERE status=Draft
+        // 命中 0 行 → 拒绝（封账记录不可被覆盖），消除「读到 draft→另一请求 lock→本请求仍覆盖」竞态。
+        // cost/gap 保持 NULL（draft 本就 NULL，不在 SET 中即不变）。
         Some(r) => {
-            let mut active: reconciliations::ActiveModel = r.into();
-            active.total_revenue = Set(total_revenue);
-            active.total_calls = Set(total_calls);
-            active.upstream_cost = Set(None);
-            active.gap = Set(None);
-            active.detail = Set(Some(detail));
-            active.generated_at = Set(now);
-            active.update(db).await?
+            let res = reconciliations::Entity::update_many()
+                .col_expr(
+                    reconciliations::Column::TotalRevenue,
+                    Expr::value(total_revenue),
+                )
+                .col_expr(
+                    reconciliations::Column::TotalCalls,
+                    Expr::value(total_calls),
+                )
+                .col_expr(reconciliations::Column::Detail, Expr::value(detail))
+                .col_expr(reconciliations::Column::GeneratedAt, Expr::value(now))
+                .filter(reconciliations::Column::Id.eq(r.id))
+                .filter(reconciliations::Column::Status.eq(reconciliations::ReconStatus::Draft))
+                .exec(db)
+                .await?;
+            if res.rows_affected == 0 {
+                return Err(AppError::BadRequest(
+                    "locked period cannot be regenerated".into(),
+                ));
+            }
+            reconciliations::Entity::find_by_id(r.id)
+                .one(db)
+                .await?
+                .ok_or_else(|| AppError::Internal("reconciliation vanished after regen".into()))?
         }
         // 新建 draft。
         None => {
@@ -222,12 +241,12 @@ pub async fn lock(
     let at = Utc::now().fixed_offset();
     let backend = db.get_database_backend();
 
-    // 仅 draft→locked 命中；并发下只有一个能拿到非空 RETURNING。
+    // 仅 draft→locked 命中；并发下只有一个能拿到非空 RETURNING。RETURNING * 命中即直接映射 Model，省一次回查。
     let updated = db
         .query_one_raw(Statement::from_sql_and_values(
             backend,
             "UPDATE reconciliations SET status = $1, locked_at = $2 \
-             WHERE id = $3 AND status = $4 RETURNING id",
+             WHERE id = $3 AND status = $4 RETURNING *",
             [
                 reconciliations::ReconStatus::Locked.into(),
                 at.into(),
@@ -237,19 +256,15 @@ pub async fn lock(
         ))
         .await?;
 
-    if updated.is_none() {
-        // 0 行：不存在 → 404；已 locked → 幂等返回。
-        let cur = reconciliations::Entity::find_by_id(id)
-            .one(db)
-            .await?
-            .ok_or(AppError::NotFound)?;
-        return Ok(Json(cur));
+    match updated {
+        Some(row) => Ok(Json(reconciliations::Model::from_query_result(&row, "")?)),
+        None => {
+            // 0 行：不存在 → 404；已 locked → 幂等返回。
+            let cur = reconciliations::Entity::find_by_id(id)
+                .one(db)
+                .await?
+                .ok_or(AppError::NotFound)?;
+            Ok(Json(cur))
+        }
     }
-
-    // 回查已封账对账单作响应。
-    let r = reconciliations::Entity::find_by_id(id)
-        .one(db)
-        .await?
-        .ok_or_else(|| AppError::Internal("reconciliation vanished after lock".into()))?;
-    Ok(Json(r))
 }
