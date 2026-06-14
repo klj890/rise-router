@@ -71,7 +71,9 @@ async fn chat_completions(
         }
     }
 
-    // 3.5 钱包余额预检：可用额度 <= 0 直接 402，不浪费上游调用（后扣，放行 >0 的请求）
+    // 3.5 钱包余额预检：可用额度 <= 0 直接 402，不浪费上游调用（后扣，放行 >0 的请求）。
+    //     当前一次索引主键查（wallets.org_id 唯一），开销低；待并发量级证明为瓶颈再引 Redis
+    //     缓存「可用额度>0」布尔（充值/扣费时失效）——避免过早造二级设施。
     rise_billing::ensure_funds(db, ctx.org_id).await?;
 
     // 4. 流式：规范化 stream=true，并注入 stream_options.include_usage（客户端未设时）以拿到末块 usage 计费。
