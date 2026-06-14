@@ -1,7 +1,7 @@
 //! 计费金额计算纯函数：单价 × 用量 → 金额。无 DB 依赖，单测覆盖。
 //!
 //! 单价取自定价域解析结果（`base_unit_prices` 折前 / `final_unit_prices` percentage 折后），
-//! 用量来自上游响应。全程 Decimal 保精度（财务对账），仅在落库为 numeric(18,6)。
+//! 用量来自上游响应。全程 Decimal 保精度（财务对账），落库精度 numeric(18,8)。
 
 use rust_decimal::Decimal;
 use serde_json::Value;
@@ -43,8 +43,9 @@ pub fn compute_charge(billing_unit: &str, unit_prices: &Value, quantity: &Value)
         // 先乘后除：减少 Decimal 除法的精度损失与尺度扩张（财务精度最佳实践）
         total += q * p / divisor;
     }
-    // numeric(18,6) 落库精度：保留 6 位
-    total.round_dp(6)
+    // numeric(18,8) 落库精度：保留 8 位。6 位会把极便宜模型的微小调用（如 0.1 元/百万 × 3 token
+    // = 0.0000003）round 到 0 → 高频微调用无限免费，故提到 8 位堵此漏洞。
+    total.round_dp(8)
 }
 
 /// 从上游 OpenAI 兼容响应体提取 token 用量 → 标准 quantity（{input,output}）。
@@ -148,6 +149,17 @@ mod tests {
         assert_eq!(
             extract_token_usage(&body),
             Some(json!({ "input": 0, "output": 5 }))
+        );
+    }
+
+    #[test]
+    fn tiny_charge_not_rounded_to_zero() {
+        // 极便宜模型 0.1 元/百万 token，3 tokens → 0.0000003；8 位精度下仍计费（非 0），堵高频微调用免费洞
+        let prices = json!({ "input": 0.1 });
+        let qty = json!({ "input": 3 });
+        assert_eq!(
+            compute_charge("token", &prices, &qty),
+            "0.0000003".parse::<Decimal>().unwrap()
         );
     }
 

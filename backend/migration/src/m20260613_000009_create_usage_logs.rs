@@ -37,11 +37,12 @@ impl MigrationTrait for Migration {
                     .col(string_len(UsageLogs::BillingUnit, 16))
                     // 用量 {input,output} / {seconds,resolution} 等
                     .col(json_binary(UsageLogs::Quantity))
-                    .col(decimal_len(UsageLogs::BaseAmount, 18, 6))
+                    // 18,8：6 位会把极便宜模型的微小调用 round 到 0（高频免费洞），故用 8 位
+                    .col(decimal_len(UsageLogs::BaseAmount, 18, 8))
                     .col(json_binary_null(UsageLogs::DiscountDetail))
-                    .col(decimal_len(UsageLogs::ChargedAmount, 18, 6))
+                    .col(decimal_len(UsageLogs::ChargedAmount, 18, 8))
                     // 渠道成本（毛利报表用）；渠道成本字段未建，暂留空
-                    .col(decimal_len_null(UsageLogs::CostAmount, 18, 6))
+                    .col(decimal_len_null(UsageLogs::CostAmount, 18, 8))
                     .col(integer_null(UsageLogs::LatencyMs))
                     .col(boolean(UsageLogs::IsStream).default(false))
                     .col(

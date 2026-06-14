@@ -11,6 +11,7 @@ mod m20260613_000006_create_model_channels;
 mod m20260613_000007_create_organizations;
 mod m20260613_000008_create_api_keys;
 mod m20260613_000009_create_usage_logs;
+mod m20260613_000010_widen_budget_precision;
 
 pub struct Migrator;
 
@@ -27,6 +28,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260613_000007_create_organizations::Migration),
             Box::new(m20260613_000008_create_api_keys::Migration),
             Box::new(m20260613_000009_create_usage_logs::Migration),
+            Box::new(m20260613_000010_widen_budget_precision::Migration),
         ]
     }
 }
