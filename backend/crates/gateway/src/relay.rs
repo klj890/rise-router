@@ -3,7 +3,7 @@
 //! 本切片：chat/completions 非流式 + 流式 SSE 转发与计费。`/v1/tasks` 任务类留后续。
 
 use std::collections::HashMap;
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use axum::{
@@ -224,7 +224,55 @@ async fn send_with_retry(
     }
 }
 
-/// 构造流式响应：边转发 SSE 字节边扫描 usage，流结束后结算（move 所需上下文进 stream 以满足 'static）。
+/// 扫描到的、供结算用的共享状态（边流边写，guard 在流被 Drop 时读取）。
+#[derive(Default)]
+struct ScanShared {
+    usage: Option<Value>,
+    request_id: Option<String>,
+}
+
+/// 结算守卫：随流生成器一起 Drop。**无论正常结束还是客户端提前断连**（axum 会 Drop 响应体流，
+/// 末尾代码不再执行），都在此触发结算，杜绝断连漏单。无扫到 usage 则跳过（无从计费）。
+struct SettleGuard {
+    state: AppState,
+    ctx: rise_identity::KeyContext,
+    model: String,
+    channel_id: i32,
+    shared: Arc<Mutex<ScanShared>>,
+}
+
+impl Drop for SettleGuard {
+    fn drop(&mut self) {
+        let (quantity, request_id) = {
+            let mut s = self.shared.lock().unwrap();
+            (s.usage.take(), s.request_id.take())
+        };
+        let Some(quantity) = quantity else {
+            tracing::debug!(model = %self.model, "stream ended without usage, skip billing");
+            return;
+        };
+        // Drop 是同步的；用当前运行时句柄异步结算（断连发生在请求路径内，runtime 仍在）
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            tracing::error!(model = %self.model, "no runtime in SettleGuard drop; stream unbilled");
+            return;
+        };
+        let (state, ctx, model, channel_id) = (
+            self.state.clone(),
+            self.ctx.clone(),
+            self.model.clone(),
+            self.channel_id,
+        );
+        handle.spawn(async move {
+            do_settle(
+                &state, &ctx, &model, channel_id, quantity, request_id, None, true,
+            )
+            .await;
+        });
+    }
+}
+
+/// 构造流式响应：边转发 SSE 字节边扫描 usage，结算由 [`SettleGuard`] 在流 Drop 时统一触发
+/// （move 所需上下文进 stream 以满足 'static）。
 fn stream_response(
     resp: reqwest::Response,
     state: AppState,
@@ -234,6 +282,15 @@ fn stream_response(
 ) -> Response {
     let content_type = resp.headers().get(header::CONTENT_TYPE).cloned();
     let body = Body::from_stream(async_stream::stream! {
+        let shared = Arc::new(Mutex::new(ScanShared::default()));
+        // guard 持有上下文，正常结束或提前断连被 Drop 时都会结算
+        let _guard = SettleGuard {
+            state,
+            ctx,
+            model,
+            channel_id,
+            shared: shared.clone(),
+        };
         let mut scanner = UsageScanner::default();
         let mut request_id: Option<String> = None;
         let stream = resp.bytes_stream();
@@ -242,6 +299,16 @@ fn stream_response(
             match item {
                 Ok(bytes) => {
                     scanner.feed(&bytes, &mut request_id);
+                    // 边流边镜像到 shared，供 guard 在任意时刻 Drop 时读取
+                    {
+                        let mut s = shared.lock().unwrap();
+                        if s.request_id.is_none() {
+                            s.request_id.clone_from(&request_id);
+                        }
+                        if s.usage.is_none() {
+                            s.usage.clone_from(&scanner.usage);
+                        }
+                    }
                     yield Ok::<_, std::io::Error>(bytes);
                 }
                 Err(e) => {
@@ -250,13 +317,6 @@ fn stream_response(
                     break;
                 }
             }
-        }
-        // 流结束（最后一次 yield 之后）：用扫描到的 usage 结算
-        match scanner.into_usage() {
-            Some(quantity) => {
-                do_settle(&state, &ctx, &model, channel_id, quantity, request_id, None, true).await;
-            }
-            None => tracing::debug!(%model, "stream: no usage parsed, skip billing"),
         }
     });
     let mut out = HeaderMap::new();
@@ -279,34 +339,35 @@ impl UsageScanner {
         self.buf.extend_from_slice(bytes);
         // '\n' 是 ASCII，按字节切行对 UTF-8 安全
         while let Some(pos) = self.buf.iter().position(|&b| b == b'\n') {
-            let line: Vec<u8> = self.buf.drain(..=pos).collect();
-            let line = String::from_utf8_lossy(&line);
-            let Some(data) = line.trim().strip_prefix("data:") else {
-                continue;
-            };
-            let data = data.trim();
-            if data == "[DONE]" {
-                continue;
-            }
-            let Ok(v) = serde_json::from_str::<Value>(data) else {
-                continue;
-            };
-            if request_id.is_none() {
-                if let Some(id) = v.get("id").and_then(Value::as_str) {
-                    *request_id = Some(id.to_string());
+            {
+                // 在切片上处理，避免每行 drain().collect() 分配
+                let line = String::from_utf8_lossy(&self.buf[..pos]);
+                if let Some(data) = line.trim().strip_prefix("data:") {
+                    let data = data.trim();
+                    if data != "[DONE]" {
+                        // 流式每 token 一块，绝大多数块无 usage：先用关键字预筛，
+                        // 已有 request_id 且本行无 "usage" 时直接跳过昂贵的 JSON 解析（热路径）。
+                        let has_usage = data.contains("\"usage\"");
+                        if request_id.is_none() || has_usage {
+                            if let Ok(v) = serde_json::from_str::<Value>(data) {
+                                if request_id.is_none() {
+                                    if let Some(id) = v.get("id").and_then(Value::as_str) {
+                                        *request_id = Some(id.to_string());
+                                    }
+                                }
+                                // include_usage 时 usage 出现在末块（其余块为 null）
+                                if has_usage && v.get("usage").is_some_and(|u| !u.is_null()) {
+                                    if let Some(q) = rise_billing::extract_token_usage(&v) {
+                                        self.usage = Some(q);
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
-            // include_usage 时 usage 出现在末块（其余块为 null）
-            if v.get("usage").is_some_and(|u| !u.is_null()) {
-                if let Some(q) = rise_billing::extract_token_usage(&v) {
-                    self.usage = Some(q);
-                }
-            }
+            self.buf.drain(..=pos);
         }
-    }
-
-    fn into_usage(self) -> Option<Value> {
-        self.usage
     }
 }
 
