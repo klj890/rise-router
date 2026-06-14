@@ -50,8 +50,16 @@ pub fn compute_charge(billing_unit: &str, unit_prices: &Value, quantity: &Value)
 /// 缺 `usage` 字段（如流式分块/错误响应）返回 None，调用方据此跳过计费。
 pub fn extract_token_usage(body: &Value) -> Option<Value> {
     let usage = body.get("usage")?;
-    let input = usage.get("prompt_tokens").and_then(Value::as_i64);
-    let output = usage.get("completion_tokens").and_then(Value::as_i64);
+    // 防御性钳制：负数用量会算出负费用（变相退款/抬高可用预算），强制下限 0
+    // 以防恶意/有 bug 的上游返回负 token。
+    let input = usage
+        .get("prompt_tokens")
+        .and_then(Value::as_i64)
+        .map(|v| v.max(0));
+    let output = usage
+        .get("completion_tokens")
+        .and_then(Value::as_i64)
+        .map(|v| v.max(0));
     // 两者全缺则视为无可计费用量
     if input.is_none() && output.is_none() {
         return None;
@@ -139,6 +147,16 @@ mod tests {
         assert_eq!(
             extract_token_usage(&body),
             Some(json!({ "input": 0, "output": 5 }))
+        );
+    }
+
+    #[test]
+    fn extract_usage_clamps_negative_to_zero() {
+        // 恶意/有 bug 的上游返回负 token → 钳到 0，避免负费用退款漏洞
+        let body = json!({ "usage": { "prompt_tokens": -100, "completion_tokens": 3 } });
+        assert_eq!(
+            extract_token_usage(&body),
+            Some(json!({ "input": 0, "output": 3 }))
         );
     }
 }

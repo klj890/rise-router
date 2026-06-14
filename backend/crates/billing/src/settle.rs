@@ -6,12 +6,15 @@
 //!
 //! 结算失败由调用方（relay）吞掉并 log，**不影响已成功的上游响应**（at-least-serve）。
 
-use rise_core::AppResult;
+use rise_core::{AppError, AppResult};
 use rise_entity::{api_keys, usage_logs};
 use rise_pricing::resolve_price_by_group_id;
 use sea_orm::prelude::DateTimeWithTimeZone;
 use sea_orm::sea_query::{Expr, ExprTrait};
-use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter, Set,
+    TransactionError, TransactionTrait,
+};
 use serde_json::Value;
 
 use crate::charge::compute_charge;
@@ -55,8 +58,8 @@ pub async fn settle_chat(
     );
     let discount_detail = serde_json::to_value(&resolved.applied_discounts).ok();
 
-    // 1. 追加流水
-    usage_logs::ActiveModel {
+    // 流水落库 + 扣费在一个事务内完成（保证「记了流水」与「扣了预算」最终一致，避免半成功）。
+    let log = usage_logs::ActiveModel {
         org_id: Set(s.org_id),
         user_id: Set(s.user_id),
         api_key_id: Set(s.api_key_id),
@@ -76,34 +79,48 @@ pub async fn settle_chat(
         is_stream: Set(s.is_stream),
         created_at: Set(at),
         ..Default::default()
-    }
-    .insert(db)
-    .await?;
+    };
+    let api_key_id = s.api_key_id;
 
-    // 2. 原子自增预算（col_expr 走 SQL `budget_used = budget_used + charged`，避免读改写竞态）
-    api_keys::Entity::update_many()
-        .col_expr(
-            api_keys::Column::BudgetUsed,
-            Expr::col(api_keys::Column::BudgetUsed).add(charged),
-        )
-        .filter(api_keys::Column::Id.eq(s.api_key_id))
-        .exec(db)
-        .await?;
+    db.transaction::<_, (), DbErr>(move |txn| {
+        Box::pin(async move {
+            // 1. 追加流水
+            log.insert(txn).await?;
 
-    // 3. 自增后若已达上限 → 翻 Exhausted（后续调用在鉴权阶段即被拒，返回 429）
-    api_keys::Entity::update_many()
-        .col_expr(
-            api_keys::Column::Status,
-            Expr::value(api_keys::KeyStatus::Exhausted),
-        )
-        .filter(api_keys::Column::Id.eq(s.api_key_id))
-        .filter(api_keys::Column::Status.eq(api_keys::KeyStatus::Enabled))
-        .filter(api_keys::Column::BudgetLimit.is_not_null())
-        .filter(
-            Expr::col(api_keys::Column::BudgetUsed).gte(Expr::col(api_keys::Column::BudgetLimit)),
-        )
-        .exec(db)
-        .await?;
+            // 2. 单条原子 UPDATE：预算自增 + 超限翻 Exhausted 合并（消除「已超限但仍 Enabled」
+            //    的崩溃窗口，并省一次热路径 RTT）。col_expr 走 SQL `budget_used + charged`，免读改写竞态。
+            //    PostgreSQL 中 SET 右侧的列引用取更新前值，故 CASE 内 (budget_used + charged) 即新值。
+            let new_used = Expr::col(api_keys::Column::BudgetUsed).add(charged);
+            let flip_when = Expr::col(api_keys::Column::BudgetLimit)
+                .is_not_null()
+                .and(
+                    new_used
+                        .clone()
+                        .gte(Expr::col(api_keys::Column::BudgetLimit)),
+                )
+                // 仅 Enabled→Exhausted；Disabled 是管理员动作，不被结算覆盖
+                .and(
+                    Expr::col(api_keys::Column::Status)
+                        .eq(Expr::value(api_keys::KeyStatus::Enabled)),
+                );
+            api_keys::Entity::update_many()
+                .col_expr(api_keys::Column::BudgetUsed, new_used)
+                .col_expr(
+                    api_keys::Column::Status,
+                    Expr::case(flip_when, Expr::value(api_keys::KeyStatus::Exhausted))
+                        .finally(Expr::col(api_keys::Column::Status))
+                        .into(),
+                )
+                .filter(api_keys::Column::Id.eq(api_key_id))
+                .exec(txn)
+                .await?;
+            Ok(())
+        })
+    })
+    .await
+    .map_err(|e| match e {
+        TransactionError::Connection(db) | TransactionError::Transaction(db) => AppError::Db(db),
+    })?;
 
     Ok(())
 }
