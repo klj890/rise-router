@@ -7,7 +7,7 @@ mod relay;
 mod route;
 
 pub use relay::relay_routes;
-pub use route::{pick_weighted, rank_routes, RouteCandidate};
+pub use route::{pick_weighted, rank_routes, weighted_failover_order, RouteCandidate};
 
 use axum::{
     extract::{Query, State},
