@@ -9,6 +9,7 @@ pub mod discounts;
 pub mod groups;
 pub mod model_channels;
 pub mod models;
+pub mod orders;
 pub mod organizations;
 pub mod prices;
 pub mod transactions;

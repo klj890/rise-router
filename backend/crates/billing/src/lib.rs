@@ -5,6 +5,7 @@
 //! 「看流水/看余额」端点按密钥 org 隔离（RLS 雏形），走 Bearer 鉴权。
 
 mod charge;
+mod order;
 mod settle;
 mod wallet;
 
@@ -31,6 +32,8 @@ pub fn routes() -> Router<AppState> {
         .route("/usage", get(usage))
         .route("/wallet", get(wallet_get))
         .route("/recharge", post(recharge))
+        .route("/orders", post(order::create_order).get(order::list_orders))
+        .route("/orders/{id}/confirm", post(order::confirm_order))
 }
 
 #[derive(Deserialize)]
@@ -127,19 +130,7 @@ async fn recharge(
     headers: HeaderMap,
     Json(req): Json<RechargeReq>,
 ) -> AppResult<Json<RechargeResp>> {
-    // 临时管理守卫（常量时间比较，避免计时侧信道）
-    let admin = state
-        .config
-        .admin_token
-        .as_deref()
-        .ok_or(AppError::Forbidden)?;
-    let provided = headers
-        .get("x-admin-token")
-        .and_then(|v| v.to_str().ok())
-        .ok_or(AppError::Forbidden)?;
-    if !token_eq(provided, admin) {
-        return Err(AppError::Forbidden);
-    }
+    admin_guard(&state, &headers)?;
 
     let db = state.db()?;
     // 客户端传入的 org_id 校验：不存在则 404（否则 ensure_wallet 的 INSERT 触发 FK 失败 → 500）
@@ -157,6 +148,25 @@ async fn recharge(
         org_id: req.org_id,
         balance,
     }))
+}
+
+/// 临时管理守卫（RBAC 落地前）：`X-Admin-Token` 头匹配 `RR_ADMIN_TOKEN`（常量时间比较）；
+/// 未配置或不匹配则 403。recharge / orders 等管理端点共用。
+pub(crate) fn admin_guard(state: &AppState, headers: &HeaderMap) -> AppResult<()> {
+    let admin = state
+        .config
+        .admin_token
+        .as_deref()
+        .ok_or(AppError::Forbidden)?;
+    let provided = headers
+        .get("x-admin-token")
+        .and_then(|v| v.to_str().ok())
+        .ok_or(AppError::Forbidden)?;
+    if token_eq(provided, admin) {
+        Ok(())
+    } else {
+        Err(AppError::Forbidden)
+    }
 }
 
 /// 令牌比较：先各自 SHA-256 再常量时间比较定长 32 字节摘要。
