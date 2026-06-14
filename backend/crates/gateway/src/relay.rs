@@ -361,11 +361,14 @@ impl UsageScanner {
             }
         }
         self.buf.extend_from_slice(bytes);
-        // '\n' 是 ASCII，按字节切行对 UTF-8 安全
-        while let Some(pos) = self.buf.iter().position(|&b| b == b'\n') {
+        // '\n' 是 ASCII，按字节切行对 UTF-8 安全。用 consumed 游标 + 末尾单次 drain，
+        // 避免每行 drain(..=pos) 的 O(N²) 元素搬移（1MB 缓冲含多小行时是 CPU DoS 向量）。
+        let mut consumed = 0;
+        while let Some(pos) = self.buf[consumed..].iter().position(|&b| b == b'\n') {
+            let end = consumed + pos;
             {
-                // 切片上处理免每行分配；valid UTF-8 零拷贝（非法则跳过该行）
-                let line = std::str::from_utf8(&self.buf[..pos]).unwrap_or_default();
+                // 切片上处理免分配；valid UTF-8 零拷贝（非法则跳过该行）
+                let line = std::str::from_utf8(&self.buf[consumed..end]).unwrap_or_default();
                 if let Some(data) = line.trim().strip_prefix("data:") {
                     let data = data.trim();
                     if data != "[DONE]" {
@@ -390,7 +393,11 @@ impl UsageScanner {
                     }
                 }
             }
-            self.buf.drain(..=pos);
+            consumed = end + 1;
+        }
+        // 一次性移除所有已消费的完整行，保留末尾不完整行待下次 feed
+        if consumed > 0 {
+            self.buf.drain(..consumed);
         }
     }
 }
