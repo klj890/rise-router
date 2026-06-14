@@ -12,6 +12,7 @@ pub mod models;
 pub mod orders;
 pub mod organizations;
 pub mod prices;
+pub mod reconciliations;
 pub mod transactions;
 pub mod usage_logs;
 pub mod wallets;

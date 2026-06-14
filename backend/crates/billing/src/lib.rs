@@ -6,6 +6,7 @@
 
 mod charge;
 mod order;
+mod reconcile;
 mod settle;
 mod wallet;
 
@@ -34,6 +35,12 @@ pub fn routes() -> Router<AppState> {
         .route("/recharge", post(recharge))
         .route("/orders", post(order::create_order).get(order::list_orders))
         .route("/orders/{id}/confirm", post(order::confirm_order))
+        .route(
+            "/reconciliations",
+            post(reconcile::generate).get(reconcile::list),
+        )
+        .route("/reconciliations/{id}", get(reconcile::get_one))
+        .route("/reconciliations/{id}/lock", post(reconcile::lock))
 }
 
 #[derive(Deserialize)]
