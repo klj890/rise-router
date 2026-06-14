@@ -25,7 +25,10 @@ use rise_entity::{usage_logs, wallets};
 use rust_decimal::Decimal;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
+
+/// 管理守卫已上移到 [`rise_core::admin_guard`]（供各域 CRUD 共用）；
+/// 此处 re-export 保持 billing 内 `crate::admin_guard` 调用点不变。
+pub(crate) use rise_core::admin_guard;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -155,34 +158,4 @@ async fn recharge(
         org_id: req.org_id,
         balance,
     }))
-}
-
-/// 临时管理守卫（RBAC 落地前）：`X-Admin-Token` 头匹配 `RR_ADMIN_TOKEN`（常量时间比较）；
-/// 未配置或不匹配则 403。recharge / orders 等管理端点共用。
-pub(crate) fn admin_guard(state: &AppState, headers: &HeaderMap) -> AppResult<()> {
-    let admin = state
-        .config
-        .admin_token
-        .as_deref()
-        .ok_or(AppError::Forbidden)?;
-    let provided = headers
-        .get("x-admin-token")
-        .and_then(|v| v.to_str().ok())
-        .ok_or(AppError::Forbidden)?;
-    if token_eq(provided, admin) {
-        Ok(())
-    } else {
-        Err(AppError::Forbidden)
-    }
-}
-
-/// 令牌比较：先各自 SHA-256 再常量时间比较定长 32 字节摘要。
-/// 哈希后长度恒为 32，消除「长度不等早返回」泄露 token 长度的计时侧信道。
-fn token_eq(provided: &str, expected: &str) -> bool {
-    let a = Sha256::digest(provided.as_bytes());
-    let b = Sha256::digest(expected.as_bytes());
-    a.iter()
-        .zip(b.iter())
-        .fold(0u8, |acc, (x, y)| acc | (x ^ y))
-        == 0
 }
