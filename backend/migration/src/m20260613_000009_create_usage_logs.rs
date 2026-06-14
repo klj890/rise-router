@@ -83,6 +83,17 @@ impl MigrationTrait for Migration {
                     .col(UsageLogs::CreatedAt)
                     .to_owned(),
             )
+            .await?;
+        // 看流水游标分页支撑：org 内按 id 倒序定位（WHERE org_id=? AND id<? ORDER BY id DESC）
+        manager
+            .create_index(
+                Index::create()
+                    .name("idx_usage_logs_org_id")
+                    .table(UsageLogs::Table)
+                    .col(UsageLogs::OrgId)
+                    .col(UsageLogs::Id)
+                    .to_owned(),
+            )
             .await
     }
 
