@@ -82,30 +82,40 @@ async fn adjust_balance<C: ConnectionTrait>(
 }
 
 /// 消费扣减（settle 在其事务内复用）：余额 -amount + 记 Consume 流水关联 usage_log。
-pub async fn consume<C: ConnectionTrait>(
+pub async fn consume<C: TransactionTrait>(
     db: &C,
     org_id: i32,
     amount: Decimal,
     usage_log_id: i64,
     at: DateTimeWithTimeZone,
 ) -> Result<(), DbErr> {
-    // 防御：amount<=0 时 -amount>=0 会变成给钱包加钱（消费变充值）。调用方虽已 charged>0，
-    // 但 consume 是 pub 原语，自身兜底。
+    // 先 round 再校验：极小正数 round 到 0 应被拒；amount<=0 时 -amount>=0 会反给钱包加钱。
+    // consume 是 pub 原语，自身兜底校验。
+    let amount = amount.round_dp(8);
     if amount <= Decimal::ZERO {
         return Err(DbErr::Custom("consume amount must be positive".into()));
     }
-    adjust_balance(
-        db,
-        org_id,
-        -amount,
-        transactions::TxnKind::Consume,
-        Some("usage_log"),
-        Some(usage_log_id),
-        None,
-        at,
-    )
+    // 自包事务：扣余额 + 记流水原子（直接传 DatabaseConnection 调用也一致；在 settle 内则为 savepoint）
+    db.transaction::<_, (), DbErr>(move |txn| {
+        Box::pin(async move {
+            adjust_balance(
+                txn,
+                org_id,
+                -amount,
+                transactions::TxnKind::Consume,
+                Some("usage_log"),
+                Some(usage_log_id),
+                None,
+                at,
+            )
+            .await?;
+            Ok(())
+        })
+    })
     .await
-    .map(|_| ())
+    .map_err(|e| match e {
+        TransactionError::Connection(db) | TransactionError::Transaction(db) => db,
+    })
 }
 
 /// 钱包可用额度 = 余额 + 授信 − 冻结；无钱包视为 0。
@@ -139,6 +149,8 @@ pub async fn recharge<C: TransactionTrait>(
     memo: Option<String>,
     at: DateTimeWithTimeZone,
 ) -> AppResult<Decimal> {
+    // 先 round 到 8 位再校验：极小正数 round 到 0 会记一笔 0 元充值流水却不增余额
+    let amount = amount.round_dp(8);
     if amount <= Decimal::ZERO {
         return Err(AppError::BadRequest("amount must be positive".into()));
     }
