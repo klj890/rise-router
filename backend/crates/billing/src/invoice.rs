@@ -11,7 +11,7 @@ use axum::{
     Json,
 };
 use rise_core::{AppError, AppResult, AppState};
-use rise_entity::invoices;
+use rise_entity::{invoices, orders};
 use rust_decimal::Decimal;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, FromQueryResult, QueryFilter,
@@ -101,10 +101,28 @@ pub async fn create(
         ));
     }
 
-    // memo 列 varchar(256)：超长先拦 400。
-    if let Some(ref m) = req.memo {
+    // memo 列 varchar(256)：trim + 超长先拦 400（与 title/tax_no 一致地清洗，空白视同未填）。
+    let memo = req
+        .memo
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned);
+    if let Some(ref m) = memo {
         if m.chars().count() > 256 {
             return Err(AppError::BadRequest("memo too long (max 256)".into()));
+        }
+    }
+
+    // order_id 软引用归属校验：若指定，必须存在且属本 org（不信任客户端，杜绝伪造跨 org 审计线索）。
+    // 与 order::create_order 对 org 存在性的前置校验同构。金额是否 ≤ 该订单额留作财务策略（见 PR 说明）。
+    if let Some(oid) = req.order_id {
+        let order = orders::Entity::find_by_id(oid)
+            .one(db)
+            .await?
+            .ok_or(AppError::NotFound)?;
+        if order.org_id != ctx.org_id {
+            return Err(AppError::Forbidden);
         }
     }
 
@@ -117,7 +135,7 @@ pub async fn create(
         tax_no: Set(tax_no),
         amount: Set(amount),
         status: Set(invoices::InvoiceStatus::Pending),
-        memo: Set(req.memo),
+        memo: Set(memo),
         created_at: Set(now),
         issued_at: Set(None),
         ..Default::default()
