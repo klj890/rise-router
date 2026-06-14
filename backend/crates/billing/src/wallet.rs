@@ -8,8 +8,8 @@ use rise_entity::{transactions, wallets};
 use rust_decimal::Decimal;
 use sea_orm::prelude::DateTimeWithTimeZone;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, DbErr, EntityTrait,
-    QueryFilter, Set, Statement, TransactionError, TransactionTrait,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DbErr, EntityTrait, QueryFilter, Set,
+    Statement, TransactionError, TransactionTrait,
 };
 
 /// 确保 org 有钱包行（不存在则建 0 余额）。幂等。
@@ -37,16 +37,32 @@ async fn adjust_balance<C: ConnectionTrait>(
     memo: Option<String>,
     at: DateTimeWithTimeZone,
 ) -> Result<Decimal, DbErr> {
-    ensure_wallet(db, org_id).await?;
-    // 行锁串行化：并发扣减不丢更新；RETURNING 拿到本笔后的余额作快照
-    let row = db
+    // 对齐 numeric(18,8)：delta 若超 8 位会与库存截断分歧（充值金额可能带更多小数）
+    let delta = delta.round_dp(8);
+    // 乐观更新：先 UPDATE（热路径钱包已存在，命中即省一次写）；行锁串行化并发扣减、RETURNING 拿新余额。
+    // 仅当钱包不存在（0 行）才建钱包后重试，避免每次扣减都打一次 INSERT。
+    let sql = "UPDATE wallets SET balance = balance + $1 WHERE org_id = $2 RETURNING balance";
+    let backend = db.get_database_backend();
+    let row = match db
         .query_one_raw(Statement::from_sql_and_values(
-            db.get_database_backend(),
-            "UPDATE wallets SET balance = balance + $1 WHERE org_id = $2 RETURNING balance",
+            backend,
+            sql,
             [delta.into(), org_id.into()],
         ))
         .await?
-        .ok_or_else(|| DbErr::Custom("wallet missing after ensure".into()))?;
+    {
+        Some(r) => r,
+        None => {
+            ensure_wallet(db, org_id).await?;
+            db.query_one_raw(Statement::from_sql_and_values(
+                backend,
+                sql,
+                [delta.into(), org_id.into()],
+            ))
+            .await?
+            .ok_or_else(|| DbErr::Custom("wallet missing after ensure".into()))?
+        }
+    };
     let new_balance: Decimal = row.try_get("", "balance")?;
 
     transactions::ActiveModel {
@@ -73,6 +89,11 @@ pub async fn consume<C: ConnectionTrait>(
     usage_log_id: i64,
     at: DateTimeWithTimeZone,
 ) -> Result<(), DbErr> {
+    // 防御：amount<=0 时 -amount>=0 会变成给钱包加钱（消费变充值）。调用方虽已 charged>0，
+    // 但 consume 是 pub 原语，自身兜底。
+    if amount <= Decimal::ZERO {
+        return Err(DbErr::Custom("consume amount must be positive".into()));
+    }
     adjust_balance(
         db,
         org_id,
@@ -106,9 +127,11 @@ pub async fn ensure_funds<C: ConnectionTrait>(db: &C, org_id: i32) -> AppResult<
     }
 }
 
-/// 手动充值入账（管理员/销售代客；片 B 订单支付成功后亦复用）。事务内 余额+amount + 记 Recharge 流水。
-pub async fn recharge(
-    db: &DatabaseConnection,
+/// 手动充值入账（管理员/销售代客）。事务内 余额+amount + 记 Recharge 流水。
+/// 泛型 `C: TransactionTrait`：传 DatabaseConnection 起新事务，或传 DatabaseTransaction 作 savepoint
+/// 嵌入外层事务（片 B 订单支付成功后「改订单状态 + 入账钱包」原子复用）。
+pub async fn recharge<C: TransactionTrait>(
+    db: &C,
     org_id: i32,
     amount: Decimal,
     ref_type: &str,

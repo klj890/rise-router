@@ -23,6 +23,7 @@ use rise_entity::{usage_logs, wallets};
 use rust_decimal::Decimal;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -136,7 +137,7 @@ async fn recharge(
         .get("x-admin-token")
         .and_then(|v| v.to_str().ok())
         .ok_or(AppError::Forbidden)?;
-    if !ct_eq(provided.as_bytes(), admin.as_bytes()) {
+    if !token_eq(provided, admin) {
         return Err(AppError::Forbidden);
     }
 
@@ -150,10 +151,13 @@ async fn recharge(
     }))
 }
 
-/// 常量时间字节比较（长度不等直接 false，长度泄露不敏感）。
-fn ct_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+/// 令牌比较：先各自 SHA-256 再常量时间比较定长 32 字节摘要。
+/// 哈希后长度恒为 32，消除「长度不等早返回」泄露 token 长度的计时侧信道。
+fn token_eq(provided: &str, expected: &str) -> bool {
+    let a = Sha256::digest(provided.as_bytes());
+    let b = Sha256::digest(expected.as_bytes());
+    a.iter()
+        .zip(b.iter())
+        .fold(0u8, |acc, (x, y)| acc | (x ^ y))
+        == 0
 }
