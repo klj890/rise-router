@@ -348,9 +348,9 @@ struct UsageScanner {
 
 impl UsageScanner {
     fn feed(&mut self, bytes: &[u8], request_id: &mut Option<String>) {
-        // 防 DoS：上游若发无换行的超长流，buf 会无限增长 OOM。单条 SSE 行远小于此上限，
-        // 超限即丢弃累积的不完整行（不影响后续完整行的 usage 提取）。
-        const MAX_BUF: usize = 64 * 1024;
+        // 防 DoS：上游若发无换行的超长流，buf 会无限增长 OOM。1MB 上限：既封顶内存，又容纳
+        // 大型 tool call/复杂 JSON 的单个 SSE 块（64KB 会误清这类合法行 → 漏掉末块 usage 绕过计费）。
+        const MAX_BUF: usize = 1024 * 1024;
         if self.buf.len() + bytes.len() > MAX_BUF {
             tracing::warn!("SSE line buffer exceeded {MAX_BUF}B, clearing to prevent OOM");
             self.buf.clear();
