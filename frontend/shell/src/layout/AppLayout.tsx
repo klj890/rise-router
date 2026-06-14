@@ -9,6 +9,8 @@ import {
   CustomerServiceOutlined,
   UserOutlined,
   BgColorsOutlined,
+  SafetyOutlined,
+  SettingOutlined,
 } from '@ant-design/icons'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
@@ -30,16 +32,52 @@ export default function AppLayout() {
   const brand = useThemeStore((s) => s.brand)
   const appName = brand.appName ?? t('common:brand')
 
-  // 导航对应数据模型十大域；M0 仅「概览」「外观设置」可达，其余为后续里程碑占位。
+  // 导航对应数据模型十大域。管理台 CRUD（网关/定价/身份）已可达；billing/crm/report/support 为后续里程碑占位。
   const menuItems = [
     { key: '/dashboard', icon: <DashboardOutlined />, label: t('common:nav.overview') },
-    { key: '/gateway', icon: <ApiOutlined />, label: t('common:nav.gateway') },
-    { key: '/pricing', icon: <DollarOutlined />, label: t('common:nav.pricing') },
+    {
+      key: 'gateway',
+      icon: <ApiOutlined />,
+      label: t('common:nav.gateway'),
+      children: [
+        { key: '/admin/channels', label: '渠道' },
+        { key: '/admin/models', label: '模型' },
+        { key: '/admin/model-channels', label: '路由线' },
+      ],
+    },
+    {
+      key: 'pricing',
+      icon: <DollarOutlined />,
+      label: t('common:nav.pricing'),
+      children: [
+        { key: '/admin/groups', label: '分组' },
+        { key: '/admin/prices', label: '价格' },
+        { key: '/admin/discounts', label: '折扣' },
+        { key: '/admin/price-preview', label: '价格预览' },
+      ],
+    },
+    {
+      key: 'identity',
+      icon: <SafetyOutlined />,
+      label: '身份与组织',
+      children: [
+        { key: '/admin/organizations', label: '组织' },
+        { key: '/admin/api-keys', label: '密钥' },
+      ],
+    },
     { key: '/billing', icon: <AccountBookOutlined />, label: t('common:nav.billing') },
     { key: '/crm', icon: <TeamOutlined />, label: t('common:nav.crm') },
     { key: '/report', icon: <BarChartOutlined />, label: t('common:nav.report') },
     { key: '/support', icon: <CustomerServiceOutlined />, label: t('common:nav.support') },
-    { key: '/settings/appearance', icon: <BgColorsOutlined />, label: t('common:nav.appearance') },
+    {
+      key: 'settings',
+      icon: <SettingOutlined />,
+      label: '系统设置',
+      children: [
+        { key: '/settings/appearance', icon: <BgColorsOutlined />, label: t('common:nav.appearance') },
+        { key: '/settings/admin-token', label: '管理令牌' },
+      ],
+    },
   ]
 
   return (
@@ -81,7 +119,10 @@ export default function AppLayout() {
           mode="inline"
           selectedKeys={[location.pathname]}
           items={menuItems}
-          onClick={({ key }) => navigate(key)}
+          onClick={({ key }) => {
+            // 仅叶子项（路径 key）导航；子菜单父项（gateway/pricing/identity/settings）仅展开。
+            if (key.startsWith('/')) navigate(key)
+          }}
           style={{ borderInlineEnd: 'none', background: 'transparent' }}
         />
       </Sider>
