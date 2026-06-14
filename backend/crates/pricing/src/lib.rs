@@ -49,13 +49,11 @@ pub async fn resolve_price_by_group_id(
     at: DateTimeWithTimeZone,
 ) -> AppResult<ResolvedPrice> {
     let model = load_model(db, model_slug).await?;
+    // 计费热路径容错：分组被删/数据不一致时回落默认价（group=None），绝不因此中断结算。
+    // 与 slug 版的"严格报错"刻意不同——slug 来自人工输入需防拼错；group_id 来自 org 记录，
+    // 删组只应降级到默认价，而非让该次调用因 NotFound 结算失败被 at-least-serve 免单（丢收入）。
     let group = match group_id {
-        Some(g) => Some(
-            groups::Entity::find_by_id(g)
-                .one(db)
-                .await?
-                .ok_or(AppError::NotFound)?,
-        ),
+        Some(g) => groups::Entity::find_by_id(g).one(db).await?,
         None => None,
     };
     resolve_for(db, &model, group.as_ref(), at).await
