@@ -2196,7 +2196,16 @@ name = "rise-billing"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "chrono",
  "rise-core",
+ "rise-entity",
+ "rise-identity",
+ "rise-pricing",
+ "rust_decimal",
+ "sea-orm",
+ "serde",
+ "serde_json",
+ "tracing",
 ]
 
 [[package]]
@@ -2235,6 +2244,7 @@ dependencies = [
  "axum",
  "chrono",
  "reqwest",
+ "rise-billing",
  "rise-core",
  "rise-entity",
  "rise-identity",

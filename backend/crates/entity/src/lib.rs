@@ -11,3 +11,4 @@ pub mod model_channels;
 pub mod models;
 pub mod organizations;
 pub mod prices;
+pub mod usage_logs;
