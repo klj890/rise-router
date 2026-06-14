@@ -40,7 +40,8 @@ pub fn compute_charge(billing_unit: &str, unit_prices: &Value, quantity: &Value)
         let (Some(q), Some(p)) = (as_decimal(qv), prices.get(k).and_then(as_decimal)) else {
             continue;
         };
-        total += q / divisor * p;
+        // 先乘后除：减少 Decimal 除法的精度损失与尺度扩张（财务精度最佳实践）
+        total += q * p / divisor;
     }
     // numeric(18,6) 落库精度：保留 6 位
     total.round_dp(6)
