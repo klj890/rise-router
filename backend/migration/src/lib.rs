@@ -12,6 +12,8 @@ mod m20260613_000007_create_organizations;
 mod m20260613_000008_create_api_keys;
 mod m20260613_000009_create_usage_logs;
 mod m20260613_000010_widen_budget_precision;
+mod m20260613_000011_create_wallets;
+mod m20260613_000012_create_transactions;
 
 pub struct Migrator;
 
@@ -29,6 +31,8 @@ impl MigratorTrait for Migrator {
             Box::new(m20260613_000008_create_api_keys::Migration),
             Box::new(m20260613_000009_create_usage_logs::Migration),
             Box::new(m20260613_000010_widen_budget_precision::Migration),
+            Box::new(m20260613_000011_create_wallets::Migration),
+            Box::new(m20260613_000012_create_transactions::Migration),
         ]
     }
 }

@@ -11,4 +11,6 @@ pub mod model_channels;
 pub mod models;
 pub mod organizations;
 pub mod prices;
+pub mod transactions;
 pub mod usage_logs;
+pub mod wallets;
