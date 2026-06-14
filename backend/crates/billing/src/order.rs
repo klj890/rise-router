@@ -14,7 +14,7 @@ use rise_core::{AppError, AppResult, AppState};
 use rise_entity::orders;
 use rust_decimal::Decimal;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, DbErr, EntityTrait, QueryFilter, QueryOrder,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder,
     QuerySelect, Set, Statement, TransactionError, TransactionTrait,
 };
 use serde::Deserialize;
@@ -51,6 +51,10 @@ pub async fn create_order(
     let amount = req.amount.round_dp(8);
     if amount <= Decimal::ZERO {
         return Err(AppError::BadRequest("amount must be positive".into()));
+    }
+    // 上限同 wallet::recharge：否则建单成功但确认时 recharge 拒 > 99 亿 → 订单永远无法确认
+    if amount > Decimal::from(9_999_999_999i64) {
+        return Err(AppError::BadRequest("amount exceeds maximum limit".into()));
     }
 
     let now = chrono::Utc::now().fixed_offset();
@@ -106,18 +110,24 @@ pub async fn confirm_order(
     let at = chrono::Utc::now().fixed_offset();
     let trade_no = req.trade_no.clone();
 
-    // 事务内：条件 UPDATE（行锁 + WHERE status=1 并发护栏）+ 同事务 recharge 入账 → 原子提交。
+    // 事务内：条件 UPDATE（行锁 + WHERE status=Pending 并发护栏）+ 同事务 recharge 入账 → 原子提交。
+    // 事务错误类型用 AppError：recharge 的 `?` 直接传播保留错误码（不被降级成 500）；状态用枚举参数不硬编码。
     let order = db
-        .transaction::<_, orders::Model, DbErr>(move |txn| {
+        .transaction::<_, orders::Model, AppError>(move |txn| {
             Box::pin(async move {
                 let backend = txn.get_database_backend();
-                // 仅 Pending→Paid 命中；并发下只有一个事务能拿到非空 RETURNING。
                 let updated = txn
                     .query_one_raw(Statement::from_sql_and_values(
                         backend,
-                        "UPDATE orders SET status = 2, paid_at = $1, trade_no = $2 \
-                         WHERE id = $3 AND status = 1 RETURNING org_id, amount",
-                        [at.into(), trade_no.into(), id.into()],
+                        "UPDATE orders SET status = $1, paid_at = $2, trade_no = $3 \
+                         WHERE id = $4 AND status = $5 RETURNING org_id, amount",
+                        [
+                            orders::OrderStatus::Paid.into(),
+                            at.into(),
+                            trade_no.into(),
+                            id.into(),
+                            orders::OrderStatus::Pending.into(),
+                        ],
                     ))
                     .await?;
 
@@ -135,20 +145,21 @@ pub async fn confirm_order(
                             None,
                             at,
                         )
-                        .await
-                        .map_err(|e| match e {
-                            AppError::Db(db) => db,
-                            other => DbErr::Custom(other.to_string()),
-                        })?;
+                        .await?;
                     }
                     None => {
                         // 0 行：并发败者（另一事务已推进到 Paid）。回查幂等返回，不再入账。
-                        let cur = orders::Entity::find_by_id(id)
-                            .one(txn)
-                            .await?
-                            .ok_or_else(|| DbErr::Custom("order vanished mid-confirm".into()))?;
+                        let cur =
+                            orders::Entity::find_by_id(id)
+                                .one(txn)
+                                .await?
+                                .ok_or_else(|| {
+                                    AppError::Internal("order vanished mid-confirm".into())
+                                })?;
                         if cur.status != orders::OrderStatus::Paid {
-                            return Err(DbErr::Custom("order confirm race in bad state".into()));
+                            return Err(AppError::Internal(
+                                "order confirm race in bad state".into(),
+                            ));
                         }
                         return Ok(cur);
                     }
@@ -158,14 +169,13 @@ pub async fn confirm_order(
                 orders::Entity::find_by_id(id)
                     .one(txn)
                     .await?
-                    .ok_or_else(|| DbErr::Custom("order vanished after confirm".into()))
+                    .ok_or_else(|| AppError::Internal("order vanished after confirm".into()))
             })
         })
         .await
         .map_err(|e| match e {
-            TransactionError::Connection(db) | TransactionError::Transaction(db) => {
-                AppError::Db(db)
-            }
+            TransactionError::Connection(db) => AppError::Db(db),
+            TransactionError::Transaction(app_err) => app_err,
         })?;
 
     Ok(Json(order))
