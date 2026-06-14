@@ -174,6 +174,7 @@ new-api 本质上是一个 to-C 系统，其核心痛点是**倍率体系**（Mo
 - **`docs/roadmap.md`** — 功能清单十域 + 里程碑 M0–M6 + 持续约束（交付顺序：MVP 网关+定价 → 财务 → CRM → 报表 → 可插拔+客服 → 合规）。
 - **`docs/data-model.md`** — 数据模型 ER 蓝图（建表前，详见下节）。
 - **`docs/i18n.md`** — 国际化架构：全栈 i18n（zh-CN 默认+en-US）；UI 文案/内容数据/API 错误/格式化四套解耦；内容用 JSONB `*_i18n` 字段；API 错误走 code+参数（后端不绑定语言）；locale 协商 LocaleLayer；可插拔译文随 App Manifest。
+- **`docs/implementation.md`** — 已实现功能与数据库设计（as-built，含实现架构图/真实表 ER 图/定价解析流程图/主题·i18n 设计图）。改完代码后同步更新此文件，保持 as-built 准确。
 - **`docs/README.md`** — 文档索引。
 
 **同栈参考实现**：`~/claude_project/billing-report/agent-console/`（Rust axum + React/AntD/Zustand）已实现多角色财务控制台、对账、多级缓存、xlsx 导出、邮件 cron，是 M1–M2 的首要范本。其他借鉴见 `docs/architecture.md` 第 8 节。
