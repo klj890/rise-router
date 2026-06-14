@@ -170,9 +170,8 @@ pub async fn confirm_order(
                                     AppError::Internal("order vanished mid-confirm".into())
                                 })?;
                         if cur.status != orders::OrderStatus::Paid {
-                            return Err(AppError::Internal(
-                                "order confirm race in bad state".into(),
-                            ));
+                            // 并发期间被推进到 Failed/Refunded 等业务态 → 400（客户端/业务错误，非 500）
+                            return Err(AppError::BadRequest("order is not payable".into()));
                         }
                         Ok(cur)
                     }
