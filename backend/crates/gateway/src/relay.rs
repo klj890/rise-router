@@ -4,7 +4,7 @@
 //! 留待后续切片。
 
 use std::sync::OnceLock;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use axum::{
     extract::State,
@@ -93,6 +93,7 @@ async fn chat_completions(
             channel.base_url.trim_end_matches('/')
         );
 
+        let started = Instant::now();
         match client.post(&url).bearer_auth(key).json(&body).send().await {
             Ok(resp) => {
                 let status = resp.status();
@@ -112,6 +113,14 @@ async fn chat_completions(
                         continue;
                     }
                 };
+                let latency_ms = started.elapsed().as_millis().try_into().ok();
+
+                // 同步后扣结算：仅 2xx 成功调用计费（4xx 视为未消费用量，透传不扣费）。
+                // 结算失败不影响已成功响应（at-least-serve），仅 log 供对账补记。
+                if status.is_success() {
+                    settle(&state, &ctx, &model, cand.channel_id, &bytes, latency_ms).await;
+                }
+
                 // 透传上游状态 + Content-Type（非 JSON 错误响应也能让客户端正确处理）
                 let mut out_headers = HeaderMap::new();
                 out_headers.insert(
@@ -131,4 +140,43 @@ async fn chat_completions(
     // 所有候选渠道均失败
     tracing::warn!(org_id = ctx.org_id, %model, "all upstream channels failed");
     Err(AppError::Unavailable)
+}
+
+/// 同步后扣结算：解析上游 usage → 调 billing 落流水 + 扣预算。
+/// 结算错误一律吞掉只 log（上游已成功，不能因计费失败而拒绝已服务的响应；留待对账补记）。
+async fn settle(
+    state: &AppState,
+    ctx: &rise_identity::KeyContext,
+    model: &str,
+    channel_id: i32,
+    body: &[u8],
+    latency_ms: Option<i32>,
+) {
+    let Ok(db) = state.db() else { return };
+    let Ok(parsed) = serde_json::from_slice::<Value>(body) else {
+        tracing::warn!(%model, "settle: upstream body not JSON, skip billing");
+        return;
+    };
+    let Some(quantity) = rise_billing::extract_token_usage(&parsed) else {
+        tracing::debug!(%model, "settle: no usage in response, skip billing");
+        return;
+    };
+    let request_id = parsed.get("id").and_then(Value::as_str).map(str::to_string);
+    let s = rise_billing::ChatSettlement {
+        org_id: ctx.org_id,
+        user_id: ctx.user_id,
+        api_key_id: ctx.api_key_id,
+        // App 维度计费留后续（KeyContext 暂不携带 app_id）
+        app_id: None,
+        group_id: ctx.group_id,
+        model_slug: model,
+        channel_id,
+        quantity,
+        latency_ms,
+        request_id,
+        is_stream: false,
+    };
+    if let Err(e) = rise_billing::settle_chat(db, s, chrono::Utc::now().fixed_offset()).await {
+        tracing::error!(%model, error = %e, "settle_chat failed; call served but unbilled");
+    }
 }
