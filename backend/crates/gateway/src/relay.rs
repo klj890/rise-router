@@ -71,6 +71,9 @@ async fn chat_completions(
         }
     }
 
+    // 3.5 钱包余额预检：可用额度 <= 0 直接 402，不浪费上游调用（后扣，放行 >0 的请求）
+    rise_billing::ensure_funds(db, ctx.org_id).await?;
+
     // 4. 流式：规范化 stream=true，并注入 stream_options.include_usage（客户端未设时）以拿到末块 usage 计费。
     let is_stream = is_stream_requested(&body);
     if is_stream {
