@@ -63,9 +63,17 @@ async fn chat_completions(
         }
     }
 
-    // 4. 暂不支持流式计费：显式拒绝 stream=true。否则 SSE 响应体无法解析 usage，
-    //    settle 静默跳过 → 免费漏洞；且 bytes() 全缓冲也破坏流式实时性。流式计费留后续切片。
-    if body.get("stream").and_then(Value::as_bool).unwrap_or(false) {
+    // 4. 暂不支持流式计费：拒绝任何真值/疑似真值的 stream（不止 JSON bool true）。
+    //    宽松上游会把 {"stream":"true"} / {"stream":1} 当真返回 SSE → settle 解析失败静默免单。
+    //    仅 absent/null/false/0/"false" 视为非流式，其余一律拒绝。流式计费留后续切片。
+    let is_stream = match body.get("stream") {
+        None | Some(Value::Null) | Some(Value::Bool(false)) => false,
+        Some(Value::Bool(true)) => true,
+        Some(Value::String(s)) => !s.trim().eq_ignore_ascii_case("false"),
+        Some(Value::Number(n)) => n.as_i64() != Some(0),
+        _ => true,
+    };
+    if is_stream {
         return Err(AppError::BadRequest(
             "streaming is not supported yet".into(),
         ));
