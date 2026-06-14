@@ -150,6 +150,10 @@ pub async fn recharge<C: TransactionTrait>(
     if amount <= Decimal::ZERO {
         return Err(AppError::BadRequest("amount must be positive".into()));
     }
+    // 上限：numeric(18,8) 整数部分仅 10 位，过大值写库会溢出 500；应用层先拦为 400
+    if amount > Decimal::from(9_999_999_999i64) {
+        return Err(AppError::BadRequest("amount exceeds maximum limit".into()));
+    }
     let ref_type = ref_type.to_string();
     db.transaction::<_, Decimal, DbErr>(move |txn| {
         Box::pin(async move {
