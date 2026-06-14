@@ -15,6 +15,7 @@ mod m20260613_000010_widen_budget_precision;
 mod m20260613_000011_create_wallets;
 mod m20260613_000012_create_transactions;
 mod m20260613_000013_create_orders;
+mod m20260613_000014_create_reconciliations;
 
 pub struct Migrator;
 
@@ -35,6 +36,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260613_000011_create_wallets::Migration),
             Box::new(m20260613_000012_create_transactions::Migration),
             Box::new(m20260613_000013_create_orders::Migration),
+            Box::new(m20260613_000014_create_reconciliations::Migration),
         ]
     }
 }
