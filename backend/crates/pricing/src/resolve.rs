@@ -22,6 +22,7 @@ pub struct AppliedDiscount {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ResolvedPrice {
+    pub model_id: i32,
     pub model_slug: String,
     pub group_slug: Option<String>,
     pub billing_unit: String,

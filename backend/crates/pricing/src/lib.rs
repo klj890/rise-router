@@ -18,19 +18,15 @@ use sea_orm::prelude::DateTimeWithTimeZone;
 use sea_orm::{ColumnTrait, Condition, DatabaseConnection, EntityTrait, QueryFilter};
 use serde::Deserialize;
 
-/// 取数后调纯函数解析最终价。
+/// 按分组 **slug** 解析最终价（管理台预览：用户输入 slug）。
+/// 显式指定但查无此分组 → 报错，不静默回落默认价（避免拼错 slug 却默默按默认价计费）。
 pub async fn resolve_price(
     db: &DatabaseConnection,
     model_slug: &str,
     group_slug: Option<&str>,
     at: DateTimeWithTimeZone,
 ) -> AppResult<ResolvedPrice> {
-    // 计价不限模型状态：下架模型仍需解析历史价格（计费/审计）；新流量由网关路由拦截。
-    let model = models::find_by_slug(db, model_slug)
-        .await?
-        .ok_or(AppError::NotFound)?;
-
-    // 显式指定但查无此分组 → 报错，不静默回落默认价（避免拼错 slug 却默默按默认价计费）。
+    let model = load_model(db, model_slug).await?;
     let group = match group_slug {
         Some(s) => Some(
             groups::Entity::find()
@@ -41,7 +37,45 @@ pub async fn resolve_price(
         ),
         None => None,
     };
-    let group_id = group.as_ref().map(|g| g.id);
+    resolve_for(db, &model, group.as_ref(), at).await
+}
+
+/// 按分组 **id** 解析最终价（网关计费热路径：KeyContext 已带 group_id，免去 slug→id 二次查）。
+/// 与 [`resolve_price`] 复用同一 core 解析，保证「所见即所得」。
+pub async fn resolve_price_by_group_id(
+    db: &DatabaseConnection,
+    model_slug: &str,
+    group_id: Option<i32>,
+    at: DateTimeWithTimeZone,
+) -> AppResult<ResolvedPrice> {
+    let model = load_model(db, model_slug).await?;
+    let group = match group_id {
+        Some(g) => Some(
+            groups::Entity::find_by_id(g)
+                .one(db)
+                .await?
+                .ok_or(AppError::NotFound)?,
+        ),
+        None => None,
+    };
+    resolve_for(db, &model, group.as_ref(), at).await
+}
+
+/// 计价不限模型状态：下架模型仍需解析历史价格（计费/审计）；新流量由网关路由拦截。
+async fn load_model(db: &DatabaseConnection, model_slug: &str) -> AppResult<models::Model> {
+    models::find_by_slug(db, model_slug)
+        .await?
+        .ok_or(AppError::NotFound)
+}
+
+/// 价格 + 折扣解析的 core（接已加载的 model/group，slug 版与 id 版共用）。
+async fn resolve_for(
+    db: &DatabaseConnection,
+    model: &models::Model,
+    group: Option<&groups::Model>,
+    at: DateTimeWithTimeZone,
+) -> AppResult<ResolvedPrice> {
+    let group_id = group.map(|g| g.id);
 
     // 在 SQL 中过滤（命中 idx_prices_lookup）：默认价 + 该分组专属价，且当前有效。
     let group_price_cond = match group_id {
@@ -99,8 +133,9 @@ pub async fn resolve_price(
         apply_discounts(selected, &all_discounts, model.id, group_id, at);
 
     Ok(ResolvedPrice {
-        model_slug: model.slug,
-        group_slug: group.map(|g| g.slug),
+        model_id: model.id,
+        model_slug: model.slug.clone(),
+        group_slug: group.map(|g| g.slug.clone()),
         billing_unit: selected.billing_unit.clone(),
         currency: selected.currency.clone(),
         base_unit_prices: selected.unit_prices.clone(),
