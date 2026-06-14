@@ -179,6 +179,11 @@ fn prepare_stream_body(body: &mut Value) {
     let so = obj
         .entry("stream_options")
         .or_insert_with(|| Value::Object(Default::default()));
+    // 客户端可能把 stream_options 传成非对象（字符串/数组）→ as_object_mut 为 None 会漏注入而绕过计费；
+    // 一律规范化为对象
+    if !so.is_object() {
+        *so = Value::Object(Default::default());
+    }
     if let Some(so_obj) = so.as_object_mut() {
         // 强制覆盖：不接受客户端的 false（否则绕过计费）
         so_obj.insert("include_usage".into(), Value::Bool(true));
@@ -196,8 +201,9 @@ fn forward_headers(headers: &HeaderMap) -> Vec<(HeaderName, HeaderValue)> {
         .collect()
 }
 
-/// 发送上游请求；连接/超时类瞬时错误退避重试（最多 2 次尝试）。
-/// 5xx 不在此重试（交由调用方转移到下一渠道，避免重试同一报错上游）。
+/// 发送上游请求；**仅连接级**瞬时错误退避重试（最多 2 次尝试）。
+/// 不重试超时：POST 非幂等，读超时时上游可能已处理并计费，重试会致重复扣费/重复工具调用。
+/// 5xx 也不在此重试（交由调用方转移到下一渠道，避免重试同一报错上游）。
 async fn send_with_retry(
     client: &reqwest::Client,
     url: &str,
@@ -215,9 +221,9 @@ async fn send_with_retry(
         }
         match req.send().await {
             Ok(resp) => return Ok(resp),
-            Err(e) if attempt < MAX_ATTEMPTS && (e.is_connect() || e.is_timeout()) => {
+            Err(e) if attempt < MAX_ATTEMPTS && e.is_connect() => {
                 let backoff = Duration::from_millis(200 * 2u64.pow(attempt - 1));
-                tracing::warn!(url, attempt, error = %e, "transient upstream error, retrying");
+                tracing::warn!(url, attempt, error = %e, "connect error, retrying");
                 sleep(backoff).await;
             }
             Err(e) => return Err(e),
@@ -342,12 +348,19 @@ struct UsageScanner {
 
 impl UsageScanner {
     fn feed(&mut self, bytes: &[u8], request_id: &mut Option<String>) {
+        // 防 DoS：上游若发无换行的超长流，buf 会无限增长 OOM。单条 SSE 行远小于此上限，
+        // 超限即丢弃累积的不完整行（不影响后续完整行的 usage 提取）。
+        const MAX_BUF: usize = 64 * 1024;
+        if self.buf.len() + bytes.len() > MAX_BUF {
+            tracing::warn!("SSE line buffer exceeded {MAX_BUF}B, clearing to prevent OOM");
+            self.buf.clear();
+        }
         self.buf.extend_from_slice(bytes);
         // '\n' 是 ASCII，按字节切行对 UTF-8 安全
         while let Some(pos) = self.buf.iter().position(|&b| b == b'\n') {
             {
-                // 在切片上处理，避免每行 drain().collect() 分配
-                let line = String::from_utf8_lossy(&self.buf[..pos]);
+                // 切片上处理免每行分配；valid UTF-8 零拷贝（非法则跳过该行）
+                let line = std::str::from_utf8(&self.buf[..pos]).unwrap_or_default();
                 if let Some(data) = line.trim().strip_prefix("data:") {
                     let data = data.trim();
                     if data != "[DONE]" {
