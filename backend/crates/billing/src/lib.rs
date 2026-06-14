@@ -1,29 +1,35 @@
-//! 计费与财务域：usage_logs 结算 + 流水查询（wallets/transactions/orders 留 M2 财务片）。
+//! 计费与财务域：usage_logs 结算 + 流水查询 + 钱包（余额/充值/消费）。orders/对账/发票留后续片。
 //!
-//! 纯算费在 [`charge`]（无 DB，单测覆盖）；[`settle`] 是结算编排，网关 relay 复用。
-//! 「看流水」端点按密钥 org 隔离（RLS 雏形），与 whoami 同样走 Bearer 鉴权。
+//! 纯算费在 [`charge`]（无 DB，单测覆盖）；[`settle`] 是结算编排，网关 relay 复用；
+//! [`wallet`] 提供余额预检 + 充值入账 + 消费扣减（settle 复用）。
+//! 「看流水/看余额」端点按密钥 org 隔离（RLS 雏形），走 Bearer 鉴权。
 
 mod charge;
 mod settle;
+mod wallet;
 
 pub use charge::{compute_charge, extract_token_usage};
 pub use settle::{settle_chat, ChatSettlement};
+pub use wallet::{ensure_funds, wallet_available};
 
 use axum::{
     extract::{Query, State},
     http::HeaderMap,
-    routing::get,
+    routing::{get, post},
     Json, Router,
 };
 use rise_core::{AppError, AppResult, AppState};
-use rise_entity::usage_logs;
+use rise_entity::{usage_logs, wallets};
+use rust_decimal::Decimal;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/_ping", get(|| async { "billing ok" }))
         .route("/usage", get(usage))
+        .route("/wallet", get(wallet_get))
+        .route("/recharge", post(recharge))
 }
 
 #[derive(Deserialize)]
@@ -58,4 +64,96 @@ async fn usage(
         .all(db)
         .await?;
     Ok(Json(logs))
+}
+
+#[derive(Serialize)]
+struct WalletView {
+    balance: Decimal,
+    credit_limit: Decimal,
+    frozen: Decimal,
+    /// 可用额度 = balance + credit_limit − frozen
+    available: Decimal,
+}
+
+/// `GET /api/billing/wallet`（Bearer 密钥）—— 看本组织钱包余额/授信/冻结/可用额度。无钱包返回全 0。
+async fn wallet_get(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> AppResult<Json<WalletView>> {
+    let raw = rise_identity::bearer_token(&headers).ok_or(AppError::Unauthorized)?;
+    let db = state.db()?;
+    let ctx = rise_identity::verify_key(db, raw, chrono::Utc::now().fixed_offset()).await?;
+
+    let w = wallets::Entity::find()
+        .filter(wallets::Column::OrgId.eq(ctx.org_id))
+        .one(db)
+        .await?;
+    let view = match w {
+        Some(w) => WalletView {
+            available: w.balance + w.credit_limit - w.frozen,
+            balance: w.balance,
+            credit_limit: w.credit_limit,
+            frozen: w.frozen,
+        },
+        None => WalletView {
+            balance: Decimal::ZERO,
+            credit_limit: Decimal::ZERO,
+            frozen: Decimal::ZERO,
+            available: Decimal::ZERO,
+        },
+    };
+    Ok(Json(view))
+}
+
+#[derive(Deserialize)]
+struct RechargeReq {
+    org_id: i32,
+    amount: Decimal,
+    memo: Option<String>,
+}
+
+#[derive(Serialize)]
+struct RechargeResp {
+    org_id: i32,
+    balance: Decimal,
+}
+
+/// `POST /api/billing/recharge`（管理令牌）—— 手动充值入账。
+/// **临时守卫**：RBAC 落地前用 `X-Admin-Token` 头匹配 `RR_ADMIN_TOKEN`；未配置则禁用（403）。
+/// 片 B 的订单支付成功后将复用底层 `wallet::recharge`，届时此端点收敛为管理后台用途。
+async fn recharge(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<RechargeReq>,
+) -> AppResult<Json<RechargeResp>> {
+    // 临时管理守卫（常量时间比较，避免计时侧信道）
+    let admin = state
+        .config
+        .admin_token
+        .as_deref()
+        .ok_or(AppError::Forbidden)?;
+    let provided = headers
+        .get("x-admin-token")
+        .and_then(|v| v.to_str().ok())
+        .ok_or(AppError::Forbidden)?;
+    if !ct_eq(provided.as_bytes(), admin.as_bytes()) {
+        return Err(AppError::Forbidden);
+    }
+
+    let db = state.db()?;
+    let now = chrono::Utc::now().fixed_offset();
+    let balance =
+        wallet::recharge(db, req.org_id, req.amount, "manual", None, req.memo, now).await?;
+    Ok(Json(RechargeResp {
+        org_id: req.org_id,
+        balance,
+    }))
+}
+
+/// 常量时间字节比较（长度不等直接 false，长度泄露不敏感）。
+fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }

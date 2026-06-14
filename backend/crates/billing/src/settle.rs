@@ -9,6 +9,7 @@
 use rise_core::{AppError, AppResult};
 use rise_entity::{api_keys, usage_logs};
 use rise_pricing::resolve_price_by_group_id;
+use rust_decimal::Decimal;
 use sea_orm::prelude::DateTimeWithTimeZone;
 use sea_orm::sea_query::{Expr, ExprTrait};
 use sea_orm::{
@@ -81,13 +82,19 @@ pub async fn settle_chat(
         ..Default::default()
     };
     let api_key_id = s.api_key_id;
+    let org_id = s.org_id;
 
     db.transaction::<_, (), DbErr>(move |txn| {
         Box::pin(async move {
-            // 1. 追加流水
-            log.insert(txn).await?;
+            // 1. 追加调用计费流水
+            let usage_log_id = log.insert(txn).await?.id;
 
-            // 2. 单条原子 UPDATE：预算自增 + 超限翻 Exhausted 合并（消除「已超限但仍 Enabled」
+            // 2. 扣钱包余额 + 记 Consume 资金流水（charged>0 才动钱；同事务保证流水/扣费/扣余额一致）
+            if charged > Decimal::ZERO {
+                crate::wallet::consume(txn, org_id, charged, usage_log_id, at).await?;
+            }
+
+            // 3. 单条原子 UPDATE：预算自增 + 超限翻 Exhausted 合并（消除「已超限但仍 Enabled」
             //    的崩溃窗口，并省一次热路径 RTT）。col_expr 走 SQL `budget_used + charged`，免读改写竞态。
             //    PostgreSQL 中 SET 右侧的列引用取更新前值，故 CASE 内 (budget_used + charged) 即新值。
             let new_used = Expr::col(api_keys::Column::BudgetUsed).add(charged);
