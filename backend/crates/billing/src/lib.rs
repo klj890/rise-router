@@ -5,6 +5,7 @@
 //! 「看流水/看余额」端点按密钥 org 隔离（RLS 雏形），走 Bearer 鉴权。
 
 mod charge;
+mod invoice;
 mod order;
 mod reconcile;
 mod settle;
@@ -41,6 +42,9 @@ pub fn routes() -> Router<AppState> {
         )
         .route("/reconciliations/{id}", get(reconcile::get_one))
         .route("/reconciliations/{id}/lock", post(reconcile::lock))
+        .route("/invoices", post(invoice::create).get(invoice::list))
+        .route("/invoices/{id}/issue", post(invoice::issue))
+        .route("/invoices/{id}/void", post(invoice::void))
 }
 
 #[derive(Deserialize)]
