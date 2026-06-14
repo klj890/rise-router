@@ -3,14 +3,16 @@
 //! 纯校验在 [`auth`]（无 DB，单测覆盖）；[`verify_key`] 是 DB 编排，relay 鉴权复用。
 //! 用户登录/注册（users + 密码）作为后续 identity 子片。
 
+mod api_key;
 mod auth;
+mod organization;
 
 pub use auth::{evaluate_key, hash_key, KeyContext, KeyError};
 
 use axum::{
     extract::State,
     http::{header::AUTHORIZATION, HeaderMap},
-    routing::get,
+    routing::{get, post},
     Json, Router,
 };
 use rise_core::{AppError, AppResult, AppState};
@@ -57,6 +59,25 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/_ping", get(|| async { "identity ok" }))
         .route("/whoami", get(whoami))
+        // 组织管理 CRUD（admin 守卫）
+        .route(
+            "/organizations",
+            post(organization::create).get(organization::list),
+        )
+        .route(
+            "/organizations/{id}",
+            get(organization::get_one)
+                .put(organization::update)
+                .delete(organization::delete),
+        )
+        // 虚拟密钥管理 CRUD（admin 守卫；创建明文仅回显一次）
+        .route("/api-keys", post(api_key::create).get(api_key::list))
+        .route(
+            "/api-keys/{id}",
+            get(api_key::get_one)
+                .put(api_key::update)
+                .delete(api_key::delete),
+        )
 }
 
 /// `GET /api/identity/whoami`（Bearer 密钥）—— 校验并回显鉴权上下文（无密钥字段）。
