@@ -354,6 +354,11 @@ impl UsageScanner {
         if self.buf.len() + bytes.len() > MAX_BUF {
             tracing::warn!("SSE line buffer exceeded {MAX_BUF}B, clearing to prevent OOM");
             self.buf.clear();
+            // 单个数据块本身就超限：清空后直接跳过，否则下面 extend 仍会 OOM（防护失效）
+            if bytes.len() > MAX_BUF {
+                tracing::warn!("SSE chunk larger than {MAX_BUF}B, skipping");
+                return;
+            }
         }
         self.buf.extend_from_slice(bytes);
         // '\n' 是 ASCII，按字节切行对 UTF-8 安全
