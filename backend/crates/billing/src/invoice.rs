@@ -114,8 +114,9 @@ pub async fn create(
         }
     }
 
-    // order_id 软引用归属校验：若指定，必须存在且属本 org（不信任客户端，杜绝伪造跨 org 审计线索）。
-    // 与 order::create_order 对 org 存在性的前置校验同构。金额是否 ≤ 该订单额留作财务策略（见 PR 说明）。
+    // order_id 软引用归属校验 + 防虚开：若指定，订单必须存在、属本 org、已支付，且开票额 ≤ 订单额。
+    // 杜绝「挂小额/他人/未支付订单开大额发票」的虚开风险（high）。纯余额开票（无 order_id）金额仍自报，
+    // 其总额 ≤ 净充值的强校验留财务策略后续片。
     if let Some(oid) = req.order_id {
         let order = orders::Entity::find_by_id(oid)
             .one(db)
@@ -123,6 +124,14 @@ pub async fn create(
             .ok_or(AppError::NotFound)?;
         if order.org_id != ctx.org_id {
             return Err(AppError::Forbidden);
+        }
+        if order.status != orders::OrderStatus::Paid {
+            return Err(AppError::BadRequest("order is not paid".into()));
+        }
+        if amount > order.amount {
+            return Err(AppError::BadRequest(
+                "invoice amount exceeds order amount".into(),
+            ));
         }
     }
 
