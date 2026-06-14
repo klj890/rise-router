@@ -8,6 +8,8 @@ pub struct Config {
     pub database_url: String,
     pub redis_url: String,
     pub log_level: String,
+    /// 管理操作令牌（如手动充值）。RBAC 落地前的临时守卫；未设则相关管理端点禁用。
+    pub admin_token: Option<String>,
 }
 
 impl Config {
@@ -18,6 +20,7 @@ impl Config {
                 .unwrap_or_else(|_| "postgres://rise:rise@localhost:5432/rise_router".into()),
             redis_url: env::var("RR_REDIS_URL").unwrap_or_else(|_| "redis://localhost:6379".into()),
             log_level: env::var("RR_LOG_LEVEL").unwrap_or_else(|_| "info".into()),
+            admin_token: env::var("RR_ADMIN_TOKEN").ok().filter(|s| !s.is_empty()),
         }
     }
 }

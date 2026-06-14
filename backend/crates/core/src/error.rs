@@ -24,6 +24,9 @@ pub enum AppError {
     /// 配额/预算耗尽（如密钥预算上限）。
     #[error("quota exceeded")]
     QuotaExceeded,
+    /// 钱包余额不足（可用额度 = 余额 + 授信 − 冻结 <= 0）。
+    #[error("insufficient balance")]
+    InsufficientBalance,
     #[error("internal error: {0}")]
     Internal(String),
 }
@@ -37,6 +40,7 @@ impl IntoResponse for AppError {
             AppError::Forbidden => StatusCode::FORBIDDEN,
             AppError::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
             AppError::QuotaExceeded => StatusCode::TOO_MANY_REQUESTS,
+            AppError::InsufficientBalance => StatusCode::PAYMENT_REQUIRED,
             AppError::Db(_) | AppError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
         (status, Json(json!({ "error": self.to_string() }))).into_response()
