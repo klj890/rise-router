@@ -142,6 +142,14 @@ async fn recharge(
     }
 
     let db = state.db()?;
+    // 客户端传入的 org_id 校验：不存在则 404（否则 ensure_wallet 的 INSERT 触发 FK 失败 → 500）
+    if rise_entity::organizations::Entity::find_by_id(req.org_id)
+        .one(db)
+        .await?
+        .is_none()
+    {
+        return Err(AppError::NotFound);
+    }
     let now = chrono::Utc::now().fixed_offset();
     let balance =
         wallet::recharge(db, req.org_id, req.amount, "manual", None, req.memo, now).await?;
