@@ -63,10 +63,18 @@ async fn chat_completions(
         }
     }
 
-    // 4. 路由（按故障转移顺序）
+    // 4. 暂不支持流式计费：显式拒绝 stream=true。否则 SSE 响应体无法解析 usage，
+    //    settle 静默跳过 → 免费漏洞；且 bytes() 全缓冲也破坏流式实时性。流式计费留后续切片。
+    if body.get("stream").and_then(Value::as_bool).unwrap_or(false) {
+        return Err(AppError::BadRequest(
+            "streaming is not supported yet".into(),
+        ));
+    }
+
+    // 5. 路由（按故障转移顺序）
     let candidates = resolve_route(db, &model).await?;
 
-    // 5. 失败转移转发：先批量取候选渠道（1 次查询，避免循环内 N+1），再依次尝试
+    // 6. 失败转移转发：先批量取候选渠道（1 次查询，避免循环内 N+1），再依次尝试
     let channel_ids: Vec<i32> = candidates.iter().map(|c| c.channel_id).collect();
     let channel_map: HashMap<i32, channels::Model> = channels::Entity::find()
         .filter(channels::Column::Id.is_in(channel_ids))
