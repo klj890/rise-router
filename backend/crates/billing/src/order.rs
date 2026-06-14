@@ -14,8 +14,8 @@ use rise_core::{AppError, AppResult, AppState};
 use rise_entity::orders;
 use rust_decimal::Decimal;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder,
-    QuerySelect, Set, Statement, TransactionError, TransactionTrait,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, FromQueryResult, QueryFilter,
+    QueryOrder, QuerySelect, Set, Statement, TransactionError, TransactionTrait,
 };
 use serde::Deserialize;
 
@@ -56,6 +56,10 @@ pub async fn create_order(
     if amount > Decimal::from(9_999_999_999i64) {
         return Err(AppError::BadRequest("amount exceeds maximum limit".into()));
     }
+    // pay_channel 列 varchar(32)：超长写库会报错 500，应用层先拦 400
+    if req.pay_channel.chars().count() > 32 {
+        return Err(AppError::BadRequest("pay_channel too long (max 32)".into()));
+    }
 
     let now = chrono::Utc::now().fixed_offset();
     let order = orders::ActiveModel {
@@ -94,6 +98,13 @@ pub async fn confirm_order(
     admin_guard(&state, &headers)?;
     let db = state.db()?;
 
+    // trade_no 列 varchar(128)：超长写库会报错 500，应用层先拦 400
+    if let Some(ref tn) = req.trade_no {
+        if tn.chars().count() > 128 {
+            return Err(AppError::BadRequest("trade_no too long (max 128)".into()));
+        }
+    }
+
     // 事务外：存在性 + 幂等 + 状态判定（404/200 幂等/400），不进事务。
     let existing = orders::Entity::find_by_id(id)
         .one(db)
@@ -116,11 +127,12 @@ pub async fn confirm_order(
         .transaction::<_, orders::Model, AppError>(move |txn| {
             Box::pin(async move {
                 let backend = txn.get_database_backend();
+                // RETURNING * 一次拿回整行：命中即可直接映射 Model 作响应，省去事务内再 SELECT 一次。
                 let updated = txn
                     .query_one_raw(Statement::from_sql_and_values(
                         backend,
                         "UPDATE orders SET status = $1, paid_at = $2, trade_no = $3 \
-                         WHERE id = $4 AND status = $5 RETURNING org_id, amount",
+                         WHERE id = $4 AND status = $5 RETURNING *",
                         [
                             orders::OrderStatus::Paid.into(),
                             at.into(),
@@ -146,6 +158,7 @@ pub async fn confirm_order(
                             at,
                         )
                         .await?;
+                        orders::Model::from_query_result(&row, "").map_err(AppError::Db)
                     }
                     None => {
                         // 0 行：并发败者（另一事务已推进到 Paid）。回查幂等返回，不再入账。
@@ -161,15 +174,9 @@ pub async fn confirm_order(
                                 "order confirm race in bad state".into(),
                             ));
                         }
-                        return Ok(cur);
+                        Ok(cur)
                     }
                 }
-
-                // 回查已确认订单作响应。
-                orders::Entity::find_by_id(id)
-                    .one(txn)
-                    .await?
-                    .ok_or_else(|| AppError::Internal("order vanished after confirm".into()))
             })
         })
         .await
