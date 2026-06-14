@@ -162,7 +162,7 @@ pub async fn recharge<C: TransactionTrait>(
                 org_id,
                 amount,
                 transactions::TxnKind::Recharge,
-                Some(&ref_type),
+                Some(ref_type.as_str()),
                 ref_id,
                 memo,
                 at,
