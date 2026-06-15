@@ -12,6 +12,8 @@ pub struct Model {
     pub expires_at: DateTimeWithTimeZone,
     pub consumed_at: Option<DateTimeWithTimeZone>,
     pub created_at: DateTimeWithTimeZone,
+    /// 该验证码的错误尝试次数；达上限即作废（防暴力枚举）
+    pub attempts: i16,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

@@ -25,6 +25,8 @@ use serde::{Deserialize, Serialize};
 const CODE_TTL_SECS: i64 = 5 * 60;
 const RESEND_COOLDOWN_SECS: i64 = 60;
 const SESSION_TTL_SECS: i64 = 7 * 24 * 3600;
+/// 单个验证码允许的错误尝试次数，达到即作废（配合 60s 发码冷却，封死暴力枚举）。
+const MAX_CODE_ATTEMPTS: i16 = 5;
 
 /// JWT 载荷（用户会话）。sub=user_id，org=org_id。
 #[derive(Serialize, Deserialize)]
@@ -193,19 +195,35 @@ pub async fn login(
         .await?
         .ok_or(AppError::BadRequest("code expired or not requested".into()))?;
     if candidate.code_hash != code_hash(&phone, req.code.trim()) {
+        // 错误尝试 +1；达上限即作废该码（防暴力枚举：login 端点本身不限频，仅靠此计数 + 发码冷却封死）。
+        let next_attempts = candidate.attempts + 1;
+        let mut am = phone_codes::ActiveModel {
+            id: Set(candidate.id),
+            attempts: Set(next_attempts),
+            ..Default::default()
+        };
+        if next_attempts >= MAX_CODE_ATTEMPTS {
+            am.consumed_at = Set(Some(now));
+        }
+        am.update(db).await?;
         return Err(AppError::BadRequest("invalid code".into()));
     }
-    // 单次消费：标记 consumed。
+
+    // 验码通过。先查既有用户并校验状态——被停用用户**不消费**验证码（避免每次尝试白烧一个码）。
+    let existing = users::find_by_phone(db, &phone).await?;
+    if let Some(ref u) = existing {
+        if u.status != users::UserStatus::Enabled {
+            return Err(AppError::Forbidden);
+        }
+    }
+    // 单次消费：标记 consumed（确认会继续登录/注册后才消费）。
     let mut consumed: phone_codes::ActiveModel = candidate.into();
     consumed.consumed_at = Set(Some(now));
     consumed.update(db).await?;
 
     // 注册或登录。
-    let (user, registered) = match users::find_by_phone(db, &phone).await? {
+    let (user, registered) = match existing {
         Some(u) => {
-            if u.status != users::UserStatus::Enabled {
-                return Err(AppError::Forbidden);
-            }
             let mut am: users::ActiveModel = u.into();
             am.last_login_at = Set(Some(now));
             (am.update(db).await?, false)

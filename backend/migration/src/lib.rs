@@ -22,6 +22,7 @@ mod m20260613_000017_create_roles;
 mod m20260613_000018_create_permissions;
 mod m20260613_000019_create_role_permissions;
 mod m20260613_000020_create_user_roles;
+mod m20260613_000021_add_phone_code_attempts;
 
 pub struct Migrator;
 
@@ -49,6 +50,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260613_000018_create_permissions::Migration),
             Box::new(m20260613_000019_create_role_permissions::Migration),
             Box::new(m20260613_000020_create_user_roles::Migration),
+            Box::new(m20260613_000021_add_phone_code_attempts::Migration),
         ]
     }
 }

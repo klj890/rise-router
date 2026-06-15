@@ -22,7 +22,9 @@ use sea_orm::{
 };
 use serde::Deserialize;
 
-const KNOWN_SCOPES: &[&str] = &["global", "model", "group", "model_group", "org"];
+// "org" 暂不开放：单价解析器（resolve::targets）尚不处理 org 维度，开放会产生"建了却永不生效"的死折扣。
+// 待 resolve 支持 org-scope（结算期/组织上下文）后再加回。
+const KNOWN_SCOPES: &[&str] = &["global", "model", "group", "model_group"];
 const KNOWN_KINDS: &[&str] = &["percentage", "fixed"];
 
 fn validate_name(name: &str) -> AppResult<String> {

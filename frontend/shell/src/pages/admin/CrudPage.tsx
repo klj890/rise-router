@@ -62,12 +62,17 @@ export interface ResourceDef {
 
 type Row = Record<string, unknown>
 
-/** 把表单值转换为后端载荷：json 串→对象、dayjs→ISO、空值剔除。 */
+/** 把表单值转换为后端载荷：json 串→对象、dayjs→ISO、空值显式置 null（以支持"清空"）。 */
 function toPayload(fields: FieldDef[], values: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {}
   for (const f of fields) {
     const v = values[f.name]
-    if (v === undefined || v === null || v === '') continue
+    if (v === undefined || v === null || v === '') {
+      // 显式置 null（而非剔除键）：后端可清空字段（如 org.group_id 走 double_option）据此清除；
+      // 仅支持 None=不变 的字段会把 null 当 None 安全忽略。required 字段已被表单校验拦截，不会到此。
+      out[f.name] = null
+      continue
+    }
     if (f.type === 'json') {
       out[f.name] = JSON.parse(v as string) // 解析失败由调用方 catch → 提示
     } else if (f.type === 'datetime') {

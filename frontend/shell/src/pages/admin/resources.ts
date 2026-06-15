@@ -15,7 +15,8 @@ const MODALITY = ['chat', 'embedding', 'image', 'video', 'audio', 'rerank'].map(
 const INVOCATION = [opt('sync_stream', '同步流 sync_stream'), opt('async_task', '异步任务 async_task')]
 const BILLING_UNIT = ['token', 'image', 'second', 'call'].map((v) => opt(v))
 const PROTOCOL = [opt('openai_compatible')]
-const SCOPE = ['global', 'model', 'group', 'model_group', 'org'].map((v) => opt(v))
+// org 暂不开放：解析器尚不处理 org 维度折扣（详见后端 discount.rs KNOWN_SCOPES）
+const SCOPE = ['global', 'model', 'group', 'model_group'].map((v) => opt(v))
 const KIND = [opt('percentage', '按比例 percentage'), opt('fixed', '减额 fixed')]
 const ORG_TYPE = [opt('Individual', '个人'), opt('Enterprise', '企业')]
 const ORG_STATUS = [opt('Active', '活跃'), opt('Suspended', '停用')]
@@ -99,7 +100,6 @@ const discounts: ResourceDef = {
     { name: 'value', label: '值', type: 'number', required: true, inTable: true, help: 'percentage 因子∈(0,1]（如 0.9）；fixed 减额>0' },
     { name: 'target_model_id', label: '目标模型', type: 'select', optionsLoader: loadModelOptions, inEdit: false, help: 'scope=model/model_group 必填' },
     { name: 'target_group_id', label: '目标分组', type: 'select', optionsLoader: loadGroupOptions, inEdit: false, help: 'scope=group/model_group 必填' },
-    { name: 'target_org_id', label: '目标组织', type: 'select', optionsLoader: loadOrgOptions, inEdit: false, help: 'scope=org 必填' },
     { name: 'stackable', label: '可叠加', type: 'switch', inTable: true },
     { name: 'priority', label: '优先级', type: 'number', inTable: true },
     { name: 'valid_from', label: '生效时间', type: 'datetime' },

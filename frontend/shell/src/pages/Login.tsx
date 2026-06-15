@@ -152,18 +152,22 @@ export default function LoginPage() {
               autoComplete="tel"
             />
           </Form.Item>
-          <Form.Item
-            name="code"
-            label={t('auth:login.code')}
-            rules={[{ required: true, message: t('auth:login.codeRequired') }]}
-          >
+          <Form.Item label={t('auth:login.code')} required>
             <Space.Compact style={{ width: '100%' }}>
-              <Input
-                prefix={<SafetyOutlined />}
-                placeholder={t('auth:login.codePlaceholder')}
-                size="large"
-                autoComplete="one-time-code"
-              />
+              {/* name 必须落在 Input 这个真正受控的子组件上：直接包 Space.Compact 会把
+                  value/onChange 注入到布局容器而非 Input，导致 code 字段不入表单 store。 */}
+              <Form.Item
+                name="code"
+                noStyle
+                rules={[{ required: true, message: t('auth:login.codeRequired') }]}
+              >
+                <Input
+                  prefix={<SafetyOutlined />}
+                  placeholder={t('auth:login.codePlaceholder')}
+                  size="large"
+                  autoComplete="one-time-code"
+                />
+              </Form.Item>
               <Button size="large" onClick={sendCode} loading={sending} disabled={countdown > 0}>
                 {countdown > 0
                   ? t('auth:login.resendIn', { s: countdown })
