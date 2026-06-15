@@ -6,6 +6,7 @@
 
 mod charge;
 mod invoice;
+mod margin;
 mod order;
 mod reconcile;
 mod settle;
@@ -29,6 +30,7 @@ use serde::{Deserialize, Serialize};
 
 pub fn routes() -> Router<AppState> {
     Router::new()
+        .route("/margin", get(margin::margin))
         .route("/_ping", get(|| async { "billing ok" }))
         .route("/usage", get(usage))
         .route("/wallet", get(wallet_get))
