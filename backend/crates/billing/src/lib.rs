@@ -5,6 +5,8 @@
 //! 「看流水/看余额」端点按密钥 org 隔离（RLS 雏形），走 Bearer 鉴权。
 
 mod charge;
+mod email;
+mod email_cron;
 mod export;
 mod invoice;
 mod margin;
@@ -14,6 +16,7 @@ mod settle;
 mod wallet;
 
 pub use charge::{compute_charge, extract_token_usage};
+pub use email_cron::spawn as spawn_email_cron;
 pub use settle::{settle_chat, ChatSettlement};
 pub use wallet::{ensure_funds, wallet_available};
 
@@ -33,6 +36,7 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/margin", get(margin::margin))
         .route("/margin/export", get(export::export_margin))
+        .route("/email/test", post(email_cron::email_test))
         .route("/_ping", get(|| async { "billing ok" }))
         .route("/usage", get(usage))
         .route("/wallet", get(wallet_get))
