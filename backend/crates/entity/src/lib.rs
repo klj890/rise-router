@@ -7,6 +7,7 @@ pub mod api_keys;
 pub mod channels;
 pub mod discounts;
 pub mod groups;
+pub mod invoices;
 pub mod model_channels;
 pub mod models;
 pub mod orders;
