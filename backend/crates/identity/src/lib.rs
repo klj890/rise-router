@@ -5,10 +5,13 @@
 
 mod api_key;
 mod auth;
+mod guard;
 mod organization;
+mod role_admin;
 mod session;
 
 pub use auth::{evaluate_key, hash_key, KeyContext, KeyError};
+pub use guard::{require, Subject};
 
 use axum::{
     extract::State,
@@ -82,6 +85,17 @@ pub fn routes() -> Router<AppState> {
             get(api_key::get_one)
                 .put(api_key::update)
                 .delete(api_key::delete),
+        )
+        // RBAC 角色授予管理（require "rbac.manage"）
+        .route("/roles", get(role_admin::list_roles))
+        .route("/permissions", get(role_admin::list_permissions))
+        .route(
+            "/users/{id}/roles",
+            get(role_admin::list_user_roles).post(role_admin::grant),
+        )
+        .route(
+            "/users/{id}/roles/{role_slug}",
+            axum::routing::delete(role_admin::revoke),
         )
 }
 

@@ -10,7 +10,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     Json,
 };
-use rise_core::{admin_guard, AppError, AppResult, AppState};
+use rise_core::{AppError, AppResult, AppState};
 use rise_entity::{api_keys, groups, orders, organizations, wallets};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, Set,
@@ -68,7 +68,7 @@ pub async fn create(
     headers: HeaderMap,
     Json(req): Json<CreateReq>,
 ) -> AppResult<Json<organizations::Model>> {
-    admin_guard(&state, &headers)?;
+    crate::require(&state, &headers, "identity.manage").await?;
     let db = state.db()?;
 
     let name = validate_name(&req.name)?;
@@ -103,7 +103,7 @@ pub async fn list(
     headers: HeaderMap,
     Query(q): Query<ListQuery>,
 ) -> AppResult<Json<Vec<organizations::Model>>> {
-    admin_guard(&state, &headers)?;
+    crate::require(&state, &headers, "identity.manage").await?;
     let db = state.db()?;
     let mut query = organizations::Entity::find();
     if let Some(g) = q.group_id {
@@ -125,7 +125,7 @@ pub async fn get_one(
     headers: HeaderMap,
     Path(id): Path<i32>,
 ) -> AppResult<Json<organizations::Model>> {
-    admin_guard(&state, &headers)?;
+    crate::require(&state, &headers, "identity.manage").await?;
     let db = state.db()?;
     let m = organizations::Entity::find_by_id(id)
         .one(db)
@@ -155,7 +155,7 @@ pub async fn update(
     Path(id): Path<i32>,
     Json(req): Json<UpdateReq>,
 ) -> AppResult<Json<organizations::Model>> {
-    admin_guard(&state, &headers)?;
+    crate::require(&state, &headers, "identity.manage").await?;
     let db = state.db()?;
 
     let existing = organizations::Entity::find_by_id(id)
@@ -198,7 +198,7 @@ pub async fn delete(
     headers: HeaderMap,
     Path(id): Path<i32>,
 ) -> AppResult<StatusCode> {
-    admin_guard(&state, &headers)?;
+    crate::require(&state, &headers, "identity.manage").await?;
     let db = state.db()?;
 
     if organizations::Entity::find_by_id(id)

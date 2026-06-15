@@ -16,7 +16,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     Json,
 };
-use rise_core::{admin_guard, AppError, AppResult, AppState};
+use rise_core::{AppError, AppResult, AppState};
 use rise_entity::{groups, models, prices};
 use sea_orm::prelude::DateTimeWithTimeZone;
 use sea_orm::{
@@ -138,7 +138,7 @@ pub async fn create(
     headers: HeaderMap,
     Json(req): Json<CreateReq>,
 ) -> AppResult<Json<prices::Model>> {
-    admin_guard(&state, &headers)?;
+    rise_identity::require(&state, &headers, "pricing.manage").await?;
     let db = state.db()?;
 
     // 模型必须存在；billing_unit 取模型快照（不接受客户端传入，杜绝错配）。
@@ -190,7 +190,7 @@ pub async fn list(
     headers: HeaderMap,
     Query(q): Query<ListQuery>,
 ) -> AppResult<Json<Vec<prices::Model>>> {
-    admin_guard(&state, &headers)?;
+    rise_identity::require(&state, &headers, "pricing.manage").await?;
     let db = state.db()?;
     let mut query = prices::Entity::find();
     if let Some(mid) = q.model_id {
@@ -209,7 +209,7 @@ pub async fn get_one(
     headers: HeaderMap,
     Path(id): Path<i32>,
 ) -> AppResult<Json<prices::Model>> {
-    admin_guard(&state, &headers)?;
+    rise_identity::require(&state, &headers, "pricing.manage").await?;
     let db = state.db()?;
     let m = prices::Entity::find_by_id(id)
         .one(db)
@@ -235,7 +235,7 @@ pub async fn update(
     Path(id): Path<i32>,
     Json(req): Json<UpdateReq>,
 ) -> AppResult<Json<prices::Model>> {
-    admin_guard(&state, &headers)?;
+    rise_identity::require(&state, &headers, "pricing.manage").await?;
     let db = state.db()?;
 
     let existing = prices::Entity::find_by_id(id)
@@ -273,7 +273,7 @@ pub async fn delete(
     headers: HeaderMap,
     Path(id): Path<i32>,
 ) -> AppResult<StatusCode> {
-    admin_guard(&state, &headers)?;
+    rise_identity::require(&state, &headers, "pricing.manage").await?;
     let db = state.db()?;
     let res = prices::Entity::delete_by_id(id).exec(db).await?;
     if res.rows_affected == 0 {

@@ -1,4 +1,5 @@
-//! RBAC HTTP 路由。当前仅占位 `/_ping`；角色/权限点/用户授角色的管理 CRUD 下一片接入。
+//! RBAC HTTP 路由。仅占位 `/_ping`：rbac 域保持"纯逻辑+实体"，不直接挂带鉴权的 HTTP；
+//! 角色授予管理端点放在 identity 域（`identity::role_admin`，那里有 require/JWT），避免 rbac→identity 循环依赖。
 use axum::{routing::get, Router};
 use rise_core::AppState;
 

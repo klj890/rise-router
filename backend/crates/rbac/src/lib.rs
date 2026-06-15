@@ -9,7 +9,8 @@ use std::collections::HashSet;
 
 use rise_entity::{permissions, role_permissions, roles, user_roles};
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter, Set,
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter, QueryOrder,
+    Set,
 };
 
 mod routes;
@@ -21,6 +22,7 @@ pub const PERMISSIONS: &[(&str, &str, &str)] = &[
     ("pricing.manage", "pricing", "分组 / 价格 / 折扣 管理"),
     ("identity.manage", "identity", "组织 / 密钥 管理"),
     ("billing.manage", "billing", "充值 / 订单 / 对账 管理"),
+    ("rbac.manage", "rbac", "角色授予 / 权限查看 管理"),
 ];
 
 /// 内置角色：(slug, name)。
@@ -161,6 +163,61 @@ pub async fn grant_role(
         .await?;
     }
     Ok(())
+}
+
+/// 幂等撤销用户的某角色（按 slug）。角色不存在或未授均视作成功（no-op）。
+pub async fn revoke_role(
+    db: &DatabaseConnection,
+    user_id: i32,
+    role_slug: &str,
+) -> Result<(), DbErr> {
+    let Some(role) = roles::find_by_slug(db, role_slug).await? else {
+        return Ok(());
+    };
+    user_roles::Entity::delete_many()
+        .filter(user_roles::Column::UserId.eq(user_id))
+        .filter(user_roles::Column::RoleId.eq(role.id))
+        .exec(db)
+        .await?;
+    Ok(())
+}
+
+/// 列出全部角色（管理台展示）。
+pub async fn list_roles(db: &DatabaseConnection) -> Result<Vec<roles::Model>, DbErr> {
+    roles::Entity::find()
+        .order_by_asc(roles::Column::Id)
+        .all(db)
+        .await
+}
+
+/// 列出全部权限点目录（管理台展示）。
+pub async fn list_permissions(db: &DatabaseConnection) -> Result<Vec<permissions::Model>, DbErr> {
+    permissions::Entity::find()
+        .order_by_asc(permissions::Column::Id)
+        .all(db)
+        .await
+}
+
+/// 列出某用户已授的角色。
+pub async fn list_user_roles(
+    db: &DatabaseConnection,
+    user_id: i32,
+) -> Result<Vec<roles::Model>, DbErr> {
+    let role_ids: Vec<i32> = user_roles::Entity::find()
+        .filter(user_roles::Column::UserId.eq(user_id))
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|r| r.role_id)
+        .collect();
+    if role_ids.is_empty() {
+        return Ok(vec![]);
+    }
+    roles::Entity::find()
+        .filter(roles::Column::Id.is_in(role_ids))
+        .order_by_asc(roles::Column::Id)
+        .all(db)
+        .await
 }
 
 #[cfg(test)]

@@ -11,7 +11,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     Json,
 };
-use rise_core::{admin_guard, AppError, AppResult, AppState};
+use rise_core::{AppError, AppResult, AppState};
 use rise_entity::{channels, model_channels};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, Set,
@@ -130,7 +130,7 @@ pub async fn create(
     headers: HeaderMap,
     Json(req): Json<CreateReq>,
 ) -> AppResult<Json<ChannelView>> {
-    admin_guard(&state, &headers)?;
+    rise_identity::require(&state, &headers, "gateway.manage").await?;
     let db = state.db()?;
 
     let name = validate_name(&req.name)?;
@@ -161,7 +161,7 @@ pub async fn list(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> AppResult<Json<Vec<ChannelView>>> {
-    admin_guard(&state, &headers)?;
+    rise_identity::require(&state, &headers, "gateway.manage").await?;
     let db = state.db()?;
     let rows = channels::Entity::find()
         .order_by_asc(channels::Column::Id)
@@ -176,7 +176,7 @@ pub async fn get_one(
     headers: HeaderMap,
     Path(id): Path<i32>,
 ) -> AppResult<Json<ChannelView>> {
-    admin_guard(&state, &headers)?;
+    rise_identity::require(&state, &headers, "gateway.manage").await?;
     let db = state.db()?;
     let m = channels::Entity::find_by_id(id)
         .one(db)
@@ -205,7 +205,7 @@ pub async fn update(
     Path(id): Path<i32>,
     Json(req): Json<UpdateReq>,
 ) -> AppResult<Json<ChannelView>> {
-    admin_guard(&state, &headers)?;
+    rise_identity::require(&state, &headers, "gateway.manage").await?;
     let db = state.db()?;
 
     let existing = channels::Entity::find_by_id(id)
@@ -251,7 +251,7 @@ pub async fn delete(
     headers: HeaderMap,
     Path(id): Path<i32>,
 ) -> AppResult<StatusCode> {
-    admin_guard(&state, &headers)?;
+    rise_identity::require(&state, &headers, "gateway.manage").await?;
     let db = state.db()?;
 
     if channels::Entity::find_by_id(id).one(db).await?.is_none() {

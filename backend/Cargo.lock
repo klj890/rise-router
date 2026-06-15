@@ -2326,6 +2326,7 @@ dependencies = [
  "chrono",
  "rise-core",
  "rise-entity",
+ "rise-identity",
  "rust_decimal",
  "sea-orm",
  "serde",

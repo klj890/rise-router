@@ -282,12 +282,18 @@ pub struct MeResp {
     org: organizations::Model,
 }
 
+/// 从请求头取 Bearer 用户 JWT 并校验 → claims。供 [`crate::guard::require`] 与 `me` 复用。
+/// 未配置 RR_JWT_SECRET → 503；无/非法 token → 401。
+pub(crate) fn verify_request(state: &AppState, headers: &HeaderMap) -> AppResult<UserClaims> {
+    let secret = jwt_secret(state)?;
+    let raw = crate::bearer_token(headers).ok_or(AppError::Unauthorized)?;
+    verify_token(&secret, raw)
+}
+
 /// `GET /api/identity/me`（Bearer 用户 JWT）—— 回显当前用户 + 组织。
 pub async fn me(State(state): State<AppState>, headers: HeaderMap) -> AppResult<Json<MeResp>> {
-    let secret = jwt_secret(&state)?;
     let db = state.db()?;
-    let raw = crate::bearer_token(&headers).ok_or(AppError::Unauthorized)?;
-    let claims = verify_token(&secret, raw)?;
+    let claims = verify_request(&state, &headers)?;
 
     let user = users::Entity::find_by_id(claims.sub)
         .one(db)

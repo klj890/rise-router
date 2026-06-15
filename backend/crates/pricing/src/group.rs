@@ -10,7 +10,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     Json,
 };
-use rise_core::{admin_guard, AppError, AppResult, AppState};
+use rise_core::{AppError, AppResult, AppState};
 use rise_entity::{groups, organizations, prices};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, Set,
@@ -79,7 +79,7 @@ pub async fn create(
     headers: HeaderMap,
     Json(req): Json<CreateReq>,
 ) -> AppResult<Json<groups::Model>> {
-    admin_guard(&state, &headers)?;
+    rise_identity::require(&state, &headers, "pricing.manage").await?;
     let db = state.db()?;
 
     let slug = validate_slug(&req.slug)?;
@@ -107,7 +107,7 @@ pub async fn list(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> AppResult<Json<Vec<groups::Model>>> {
-    admin_guard(&state, &headers)?;
+    rise_identity::require(&state, &headers, "pricing.manage").await?;
     let db = state.db()?;
     let rows = groups::Entity::find()
         .order_by_asc(groups::Column::Id)
@@ -122,7 +122,7 @@ pub async fn get_one(
     headers: HeaderMap,
     Path(id): Path<i32>,
 ) -> AppResult<Json<groups::Model>> {
-    admin_guard(&state, &headers)?;
+    rise_identity::require(&state, &headers, "pricing.manage").await?;
     let db = state.db()?;
     let m = groups::Entity::find_by_id(id)
         .one(db)
@@ -146,7 +146,7 @@ pub async fn update(
     Path(id): Path<i32>,
     Json(req): Json<UpdateReq>,
 ) -> AppResult<Json<groups::Model>> {
-    admin_guard(&state, &headers)?;
+    rise_identity::require(&state, &headers, "pricing.manage").await?;
     let db = state.db()?;
 
     let existing = groups::Entity::find_by_id(id)
@@ -184,7 +184,7 @@ pub async fn delete(
     headers: HeaderMap,
     Path(id): Path<i32>,
 ) -> AppResult<StatusCode> {
-    admin_guard(&state, &headers)?;
+    rise_identity::require(&state, &headers, "pricing.manage").await?;
     let db = state.db()?;
 
     if groups::Entity::find_by_id(id).one(db).await?.is_none() {

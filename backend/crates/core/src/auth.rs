@@ -12,20 +12,23 @@ use sha2::{Digest, Sha256};
 /// 校验请求携带的管理令牌：`X-Admin-Token` 头匹配 `RR_ADMIN_TOKEN`（常量时间比较）；
 /// 未配置或不匹配则 [`AppError::Forbidden`]。所有域的管理 CRUD 端点共用此守卫。
 pub fn admin_guard(state: &AppState, headers: &HeaderMap) -> AppResult<()> {
-    let admin = state
-        .config
-        .admin_token
-        .as_deref()
-        .ok_or(AppError::Forbidden)?;
-    let provided = headers
-        .get("x-admin-token")
-        .and_then(|v| v.to_str().ok())
-        .ok_or(AppError::Forbidden)?;
-    if token_eq(provided, admin) {
+    if admin_token_ok(state, headers) {
         Ok(())
     } else {
         Err(AppError::Forbidden)
     }
+}
+
+/// 是否携带有效管理令牌（X-Admin-Token 匹配 RR_ADMIN_TOKEN，常量时间比较）。未配置则恒 false。
+/// 供 RBAC `require` 守卫的 superadmin 逃生通道复用——持有管理令牌即视为超管，绕过角色权限检查。
+pub fn admin_token_ok(state: &AppState, headers: &HeaderMap) -> bool {
+    let Some(admin) = state.config.admin_token.as_deref() else {
+        return false;
+    };
+    let Some(provided) = headers.get("x-admin-token").and_then(|v| v.to_str().ok()) else {
+        return false;
+    };
+    token_eq(provided, admin)
 }
 
 /// 令牌比较：先各自 SHA-256 再常量时间比较定长 32 字节摘要。

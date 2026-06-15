@@ -26,10 +26,6 @@ use rust_decimal::Decimal;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
 use serde::{Deserialize, Serialize};
 
-/// 管理守卫已上移到 [`rise_core::admin_guard`]（供各域 CRUD 共用）；
-/// 此处 re-export 保持 billing 内 `crate::admin_guard` 调用点不变。
-pub(crate) use rise_core::admin_guard;
-
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/_ping", get(|| async { "billing ok" }))
@@ -140,7 +136,7 @@ async fn recharge(
     headers: HeaderMap,
     Json(req): Json<RechargeReq>,
 ) -> AppResult<Json<RechargeResp>> {
-    admin_guard(&state, &headers)?;
+    rise_identity::require(&state, &headers, "billing.manage").await?;
 
     let db = state.db()?;
     // 客户端传入的 org_id 校验：不存在则 404（否则 ensure_wallet 的 INSERT 触发 FK 失败 → 500）

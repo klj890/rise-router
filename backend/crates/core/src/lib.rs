@@ -9,7 +9,7 @@ pub mod db;
 pub mod error;
 pub mod state;
 
-pub use auth::admin_guard;
+pub use auth::{admin_guard, admin_token_ok};
 pub use config::Config;
 pub use error::{AppError, AppResult};
 pub use state::AppState;

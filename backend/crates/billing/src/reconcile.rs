@@ -22,8 +22,6 @@ use sea_orm::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::admin_guard;
-
 #[derive(Deserialize)]
 pub struct GenerateReq {
     /// 对账周期，形如 "2026-06"（YYYY-MM）
@@ -85,7 +83,7 @@ pub async fn generate(
     headers: HeaderMap,
     Json(req): Json<GenerateReq>,
 ) -> AppResult<Json<reconciliations::Model>> {
-    admin_guard(&state, &headers)?;
+    rise_identity::require(&state, &headers, "billing.manage").await?;
     let db = state.db()?;
 
     let (start, end) = period_bounds(&req.period)?;
@@ -200,7 +198,7 @@ pub async fn list(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> AppResult<Json<Vec<reconciliations::Model>>> {
-    admin_guard(&state, &headers)?;
+    rise_identity::require(&state, &headers, "billing.manage").await?;
     let db = state.db()?;
 
     let list = reconciliations::Entity::find()
@@ -216,7 +214,7 @@ pub async fn get_one(
     headers: HeaderMap,
     Path(id): Path<i32>,
 ) -> AppResult<Json<reconciliations::Model>> {
-    admin_guard(&state, &headers)?;
+    rise_identity::require(&state, &headers, "billing.manage").await?;
     let db = state.db()?;
 
     let r = reconciliations::Entity::find_by_id(id)
@@ -235,7 +233,7 @@ pub async fn lock(
     headers: HeaderMap,
     Path(id): Path<i32>,
 ) -> AppResult<Json<reconciliations::Model>> {
-    admin_guard(&state, &headers)?;
+    rise_identity::require(&state, &headers, "billing.manage").await?;
     let db = state.db()?;
 
     let at = Utc::now().fixed_offset();

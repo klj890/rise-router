@@ -12,7 +12,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     Json,
 };
-use rise_core::{admin_guard, AppError, AppResult, AppState};
+use rise_core::{AppError, AppResult, AppState};
 use rise_entity::{channels, model_channels, models};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, Set,
@@ -66,7 +66,7 @@ pub async fn create(
     headers: HeaderMap,
     Json(req): Json<CreateReq>,
 ) -> AppResult<Json<model_channels::Model>> {
-    admin_guard(&state, &headers)?;
+    rise_identity::require(&state, &headers, "gateway.manage").await?;
     let db = state.db()?;
 
     let upstream = validate_upstream_name(&req.upstream_model_name)?;
@@ -128,7 +128,7 @@ pub async fn list(
     headers: HeaderMap,
     axum::extract::Query(q): axum::extract::Query<ListQuery>,
 ) -> AppResult<Json<Vec<model_channels::Model>>> {
-    admin_guard(&state, &headers)?;
+    rise_identity::require(&state, &headers, "gateway.manage").await?;
     let db = state.db()?;
     let mut query = model_channels::Entity::find();
     if let Some(mid) = q.model_id {
@@ -150,7 +150,7 @@ pub async fn get_one(
     headers: HeaderMap,
     Path(id): Path<i32>,
 ) -> AppResult<Json<model_channels::Model>> {
-    admin_guard(&state, &headers)?;
+    rise_identity::require(&state, &headers, "gateway.manage").await?;
     let db = state.db()?;
     let m = model_channels::Entity::find_by_id(id)
         .one(db)
@@ -177,7 +177,7 @@ pub async fn update(
     Path(id): Path<i32>,
     Json(req): Json<UpdateReq>,
 ) -> AppResult<Json<model_channels::Model>> {
-    admin_guard(&state, &headers)?;
+    rise_identity::require(&state, &headers, "gateway.manage").await?;
     let db = state.db()?;
 
     let existing = model_channels::Entity::find_by_id(id)
@@ -214,7 +214,7 @@ pub async fn delete(
     headers: HeaderMap,
     Path(id): Path<i32>,
 ) -> AppResult<StatusCode> {
-    admin_guard(&state, &headers)?;
+    rise_identity::require(&state, &headers, "gateway.manage").await?;
     let db = state.db()?;
     let res = model_channels::Entity::delete_by_id(id).exec(db).await?;
     if res.rows_affected == 0 {
