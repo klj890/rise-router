@@ -249,6 +249,13 @@ mod tests {
     }
 
     #[test]
+    fn period_huge_year_errors_not_panics() {
+        // i32::MAX 年份：debug 溢出检查开启下若 y+1 可达会 panic；实际应返回 Err（chrono 先拒）
+        assert!(parse_period("2147483647-12").is_err());
+        assert!(parse_period("2147483647-01").is_err());
+    }
+
+    #[test]
     fn period_rejects_bad_input() {
         assert!(parse_period("2026").is_err());
         assert!(parse_period("2026-13").is_err());
