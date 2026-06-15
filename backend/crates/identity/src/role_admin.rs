@@ -64,6 +64,11 @@ pub async fn grant(
     if !rise_rbac::ROLES.iter().any(|(s, _)| *s == slug) {
         return Err(AppError::BadRequest(format!("unknown role '{slug}'")));
     }
+    // 角色行须确已落库：grant_role 在角色缺失时静默 no-op，若 seed 未跑（启动时 DB 不可用仅 warn）
+    // 会"授权成功却没写入"。显式校验 DB 角色存在，缺失则 503，避免静默丢授权。
+    if roles::find_by_slug(db, slug).await?.is_none() {
+        return Err(AppError::Unavailable);
+    }
     // 用户必须存在（user_roles FK；否则 insert 触发 FK 失败 → 500）。
     if users::Entity::find_by_id(user_id).one(db).await?.is_none() {
         return Err(AppError::BadRequest("user not found".into()));

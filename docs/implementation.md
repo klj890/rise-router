@@ -293,9 +293,9 @@ sequenceDiagram
 
 ## 11. 未实现 / 后续切片
 
-- **RBAC 深化**：App 注册时声明权限点（apps 表/manifest，M5）；`user_roles.scope` 行级数据域（供报表 RLS）；superadmin 令牌逃生通道在 RBAC 完整运营后收紧/关闭。
-- **计费正确性（code-review 延后项）**：分档 `unit_prices` 的非价数值叶子会被 `scale_numeric` 随百分比折扣一并缩放（#4）；`prices.next_version` 读-改-写竞态，建议加 `(model,group,billing_unit,version)` 唯一约束（#6）。
-- **管理台增强**：非 org 维度可清空字段（api_key 预算/白名单、channel adapter_config、route priority/weight）的后端 null 清空仅 org 走 double_option；前端 FK 选项 useMemo 依赖键陈旧（#7）；字段级 i18n（表单标签中文直出）。
+- **RBAC 深化**：App 注册时声明权限点（apps 表/manifest，M5）；`user_roles.scope` 行级数据域（供报表 RLS）；superadmin 令牌逃生通道在 RBAC 完整运营后收紧/关闭；`seed_builtins` 目前仅插入不回收——将来从目录删除权限点时需补对账清理（当前只增不删，安全）。
+- **计费正确性（code-review 延后项）**：`prices.next_version` 读-改-写竞态，建议加 `(model,group,billing_unit,version)` 唯一约束（#6，低概率、需表达式索引处理 NULL group）。〔#4 分档单价被折扣污染已修：unit_prices 收紧为扁平数值映射，分档定价待专门结构。〕
+- **管理台增强**：非 org 维度可清空字段（api_key 预算/白名单、channel adapter_config、route priority/weight）的后端 null 清空仅 org 走 double_option；字段级 i18n（表单标签中文直出）。〔#7 前端 FK 选项 memo 陈旧已修。〕
 - **登录/短信**：真实短信网关替换 mock（`deliver_sms`）并移除 `dev_code` 响应字段（配置开关）；微信等第三方登录走 `user_identities` 旁表；实名认证。
 - **多模态**：`/v1/tasks` 异步任务子系统（状态机 + 轮询/webhook + artifacts/S3）；渠道成本 → `cost_amount` 毛利。
 - relay：流式 usage 块对不设 include_usage 客户端的剥离（当前透传）；协议族适配器（anthropic/gemini/任务式）。

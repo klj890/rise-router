@@ -18,7 +18,8 @@ use rise_entity::{
 };
 use sea_orm::prelude::DateTimeWithTimeZone;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, Set, TransactionTrait,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder, Set,
+    Statement, TransactionTrait,
 };
 use serde::{Deserialize, Serialize};
 
@@ -196,16 +197,20 @@ pub async fn login(
         .ok_or(AppError::BadRequest("code expired or not requested".into()))?;
     if candidate.code_hash != code_hash(&phone, req.code.trim()) {
         // 错误尝试 +1；达上限即作废该码（防暴力枚举：login 端点本身不限频，仅靠此计数 + 发码冷却封死）。
-        let next_attempts = candidate.attempts + 1;
-        let mut am = phone_codes::ActiveModel {
-            id: Set(candidate.id),
-            attempts: Set(next_attempts),
-            ..Default::default()
-        };
-        if next_attempts >= MAX_CODE_ATTEMPTS {
-            am.consumed_at = Set(Some(now));
-        }
-        am.update(db).await?;
+        // **原子**自增 + 条件作废：避免并发猜测各读到同一 attempts 而绕过上限（读-改-写竞态）。
+        let backend = db.get_database_backend();
+        db.execute_raw(Statement::from_sql_and_values(
+            backend,
+            "UPDATE phone_codes SET attempts = attempts + 1, \
+             consumed_at = CASE WHEN attempts + 1 >= $1 THEN $2 ELSE consumed_at END \
+             WHERE id = $3",
+            [
+                (MAX_CODE_ATTEMPTS as i32).into(),
+                now.into(),
+                candidate.id.into(),
+            ],
+        ))
+        .await?;
         return Err(AppError::BadRequest("invalid code".into()));
     }
 
