@@ -6,9 +6,9 @@
 
 mod charge;
 mod invoice;
+mod margin;
 mod order;
 mod reconcile;
-mod margin;
 mod settle;
 mod wallet;
 

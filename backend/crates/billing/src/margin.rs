@@ -18,7 +18,9 @@ use rise_entity::usage_logs;
 use rust_decimal::Decimal;
 use sea_orm::prelude::DateTimeWithTimeZone;
 use sea_orm::sea_query::Expr;
-use sea_orm::{ColumnTrait, EntityTrait, FromQueryResult, QueryFilter, QueryOrder, QuerySelect};
+use sea_orm::{
+    ColumnTrait, EntityTrait, ExprTrait, FromQueryResult, QueryFilter, QueryOrder, QuerySelect,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize)]
@@ -67,7 +69,7 @@ struct MarginCell {
 }
 
 #[derive(Serialize)]
-struct MarginResp {
+pub struct MarginResp {
     period: String,
     group_by: Option<String>,
     /// 该周期参与聚合的计费行是否都已配成本价（cost_covered == total）→ 毛利完整可信
@@ -151,7 +153,10 @@ pub async fn margin(
             .filter(usage_logs::Column::CreatedAt.gte(start))
             .filter(usage_logs::Column::CreatedAt.lt(end))
             .select_only()
-            .column_as(Expr::col(usage_logs::Column::ChargedAmount).sum(), "revenue")
+            .column_as(
+                Expr::col(usage_logs::Column::ChargedAmount).sum(),
+                "revenue",
+            )
             .column_as(Expr::col(usage_logs::Column::CostAmount).sum(), "cost")
             .column_as(Expr::col(usage_logs::Column::Id).count(), "total_calls")
             .column_as(
@@ -173,7 +178,13 @@ pub async fn margin(
                     total_calls: 0,
                     cost_covered_calls: 0,
                 });
-            vec![make_cell(None, r.revenue, r.cost, r.total_calls, r.cost_covered_calls)]
+            vec![make_cell(
+                None,
+                r.revenue,
+                r.cost,
+                r.total_calls,
+                r.cost_covered_calls,
+            )]
         }
         Some(gb @ ("model" | "channel")) => {
             let dim_col = if gb == "model" {
