@@ -147,8 +147,10 @@ export default function CrudPage({ resource, title }: { resource: ResourceDef; t
         m[f.name] = f.options!
       })
     return m
+    // 依赖用 dataUpdatedAt（数据刷新时变化的时间戳）而非 .data：对象 join 会被字符串化成
+    // '[object Object]'，条数不变时即便内容变了也不重算，导致 FK 选项/标签陈旧。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loaderFields, optionQueries.map((q) => q.data).join(','), resource.fields])
+  }, [loaderFields, optionQueries.map((q) => q.dataUpdatedAt).join(','), resource.fields])
 
   const saveMutation = useMutation({
     mutationFn: async (payload: Record<string, unknown>) => {

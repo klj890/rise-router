@@ -8,7 +8,7 @@
 //! - **版本化**：创建时按 (model, group, billing_unit) 自动 `version = max+1`；`select_price`
 //!   同档取最新 version → 新版自然取代旧版，旧版仍留作历史（计费/审计）。改价 = 建新版本，
 //!   不联动渠道/分组/折扣（五要素解耦）；
-//! - `unit_prices` 校验为非空对象且数值叶子有限且 ≥0（杜绝负价/空价）；
+//! - `unit_prices` 校验为**非空扁平**数值映射（每值 ≥0；不允许嵌套——折扣按比例缩放会污染非价字段，分档定价待专门结构）；
 //! - 价格是定价线叶子（无下游引用），删除直接删——管理员自负"删光价 → 该档无价"之责。
 
 use axum::{
@@ -40,52 +40,36 @@ fn clean_currency(c: Option<String>) -> AppResult<String> {
     Ok(c)
 }
 
-/// unit_prices 须为非空对象，且所有数值叶子有限且 ≥0，至少含一个数值价。
+/// unit_prices 须为**非空扁平对象**，每个值都是有限且 ≥0 的数值（价格）。
+///
+/// 刻意不允许嵌套对象/数组：折扣按比例缩放 unit_prices 的每个数值（见 `resolve::scale_numeric`），
+/// 嵌套结构里的非价字段（如分档的 up_to/数量）会被一并缩放而算错。分档/分辨率定价待**专门的
+/// 分档结构 + 分档感知的缩放**落地后再开放（见 docs §11）。
 fn validate_unit_prices(v: &Value) -> AppResult<()> {
-    match v {
-        Value::Object(o) if !o.is_empty() => {
-            let mut has_number = false;
-            check_numeric_leaves(v, &mut has_number)?;
-            if !has_number {
-                return Err(AppError::BadRequest(
-                    "unit_prices must contain at least one numeric price".into(),
-                ));
-            }
-            Ok(())
-        }
-        _ => Err(AppError::BadRequest(
+    let Value::Object(o) = v else {
+        return Err(AppError::BadRequest(
             "unit_prices must be a non-empty object".into(),
-        )),
+        ));
+    };
+    if o.is_empty() {
+        return Err(AppError::BadRequest(
+            "unit_prices must be a non-empty object".into(),
+        ));
     }
-}
-
-fn check_numeric_leaves(v: &Value, has_number: &mut bool) -> AppResult<()> {
-    match v {
-        Value::Number(n) => {
-            *has_number = true;
-            let f = n.as_f64().unwrap_or(-1.0);
-            if !f.is_finite() || f < 0.0 {
-                return Err(AppError::BadRequest(
-                    "unit_prices values must be finite and >= 0".into(),
-                ));
-            }
-            Ok(())
+    for (k, val) in o {
+        let Value::Number(n) = val else {
+            return Err(AppError::BadRequest(format!(
+                "unit_prices.{k} must be a number (nested/array pricing not supported yet)"
+            )));
+        };
+        let f = n.as_f64().unwrap_or(-1.0);
+        if !f.is_finite() || f < 0.0 {
+            return Err(AppError::BadRequest(format!(
+                "unit_prices.{k} must be finite and >= 0"
+            )));
         }
-        Value::Array(a) => {
-            for x in a {
-                check_numeric_leaves(x, has_number)?;
-            }
-            Ok(())
-        }
-        Value::Object(o) => {
-            for x in o.values() {
-                check_numeric_leaves(x, has_number)?;
-            }
-            Ok(())
-        }
-        // 字符串/布尔/null 叶子放行（如分辨率分档标签）
-        _ => Ok(()),
     }
+    Ok(())
 }
 
 /// valid_to 若存在须严格晚于 valid_from。
@@ -297,14 +281,16 @@ mod tests {
     }
 
     #[test]
-    fn unit_prices_requires_object_with_nonneg_numbers() {
+    fn unit_prices_requires_flat_nonneg_numbers() {
         assert!(validate_unit_prices(&json!({"input": 1.5, "output": 6.0})).is_ok());
-        // 嵌套分档 + 字符串标签放行
-        assert!(validate_unit_prices(&json!({"hd": {"price": 0.2}, "label": "1024x1024"})).is_ok());
-        assert!(validate_unit_prices(&json!({})).is_err());
-        assert!(validate_unit_prices(&json!([1, 2])).is_err());
-        assert!(validate_unit_prices(&json!({"input": -1.0})).is_err());
-        assert!(validate_unit_prices(&json!({"label": "x"})).is_err()); // 无数值价
+        assert!(validate_unit_prices(&json!({"per_image": 0.2})).is_ok());
+        assert!(validate_unit_prices(&json!({})).is_err()); // 空
+        assert!(validate_unit_prices(&json!([1, 2])).is_err()); // 非对象
+        assert!(validate_unit_prices(&json!({"input": -1.0})).is_err()); // 负价
+        assert!(validate_unit_prices(&json!({"label": "x"})).is_err()); // 非数值
+                                                                        // 嵌套/数组不再允许（折扣缩放会污染非价字段）：
+        assert!(validate_unit_prices(&json!({"hd": {"price": 0.2}})).is_err());
+        assert!(validate_unit_prices(&json!({"tiers": [0.1, 0.2]})).is_err());
     }
 
     #[test]
