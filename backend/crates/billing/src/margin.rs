@@ -19,7 +19,8 @@ use rust_decimal::Decimal;
 use sea_orm::prelude::DateTimeWithTimeZone;
 use sea_orm::sea_query::Expr;
 use sea_orm::{
-    ColumnTrait, EntityTrait, ExprTrait, FromQueryResult, QueryFilter, QueryOrder, QuerySelect,
+    ColumnTrait, DatabaseConnection, EntityTrait, ExprTrait, FromQueryResult, QueryFilter,
+    QueryOrder, QuerySelect,
 };
 use serde::{Deserialize, Serialize};
 
@@ -51,30 +52,30 @@ struct GroupRow {
 }
 
 #[derive(Serialize)]
-struct MarginCell {
+pub(crate) struct MarginCell {
     /// 维度标识（如 `model:3` / `channel:5`）；总览为 null
-    dim: Option<String>,
-    dim_id: Option<i32>,
+    pub(crate) dim: Option<String>,
+    pub(crate) dim_id: Option<i32>,
     /// 营收 = Σ charged_amount（全部计费行）
-    revenue: Decimal,
+    pub(crate) revenue: Decimal,
     /// 成本 = Σ cost_amount（仅已配成本价的行）
-    cost: Decimal,
+    pub(crate) cost: Decimal,
     /// 毛利 = revenue − cost
-    gross_profit: Decimal,
+    pub(crate) gross_profit: Decimal,
     /// 毛利率 = 毛利 / 营收；营收为 0 时 null
-    margin_rate: Option<Decimal>,
-    total_calls: i64,
+    pub(crate) margin_rate: Option<Decimal>,
+    pub(crate) total_calls: i64,
     /// 含成本（cost_amount 非空）的调用数
-    cost_covered_calls: i64,
+    pub(crate) cost_covered_calls: i64,
 }
 
 #[derive(Serialize)]
 pub struct MarginResp {
-    period: String,
-    group_by: Option<String>,
+    pub(crate) period: String,
+    pub(crate) group_by: Option<String>,
     /// 该周期参与聚合的计费行是否都已配成本价（cost_covered == total）→ 毛利完整可信
-    cost_complete: bool,
-    rows: Vec<MarginCell>,
+    pub(crate) cost_complete: bool,
+    pub(crate) rows: Vec<MarginCell>,
 }
 
 /// `YYYY-MM` → [当月首日, 次月首日) 的 UTC 半开区间。
@@ -137,8 +138,17 @@ pub async fn margin(
 ) -> AppResult<Json<MarginResp>> {
     rise_identity::require(&state, &headers, "billing.manage").await?;
     let db = state.db()?;
+    Ok(Json(compute_margin(db, q.period, q.group_by).await?))
+}
 
-    let period = match q.period {
+/// 毛利聚合核心：handler 与 xlsx 导出复用同一查询（所见即所导）。
+/// `period` 缺省取当月（UTC）；`group_by` = None 总览 / `"model"` / `"channel"` 下钻。
+pub(crate) async fn compute_margin(
+    db: &DatabaseConnection,
+    period: Option<String>,
+    group_by: Option<String>,
+) -> AppResult<MarginResp> {
+    let period = match period {
         Some(p) => p,
         None => {
             let now = Utc::now();
@@ -165,7 +175,7 @@ pub async fn margin(
             )
     };
 
-    let rows: Vec<MarginCell> = match q.group_by.as_deref() {
+    let rows: Vec<MarginCell> = match group_by.as_deref() {
         None => {
             // 无 group_by：聚合恒返回一行（即使空周期，SUM=NULL/COUNT=0）。
             let r = base()
@@ -222,12 +232,12 @@ pub async fn margin(
     // 毛利完整 = 所有聚合行的成本都全覆盖（无缺成本行）。
     let cost_complete = rows.iter().all(|c| c.cost_covered_calls == c.total_calls);
 
-    Ok(Json(MarginResp {
+    Ok(MarginResp {
         period,
-        group_by: q.group_by,
+        group_by,
         cost_complete,
         rows,
-    }))
+    })
 }
 
 #[cfg(test)]

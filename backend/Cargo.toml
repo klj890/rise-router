@@ -54,6 +54,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 rand = "0.8"
 async-stream = "0.3"
 futures-util = "0.3"
+rust_xlsxwriter = "0.92"
 
 # internal crates
 rise-core = { path = "crates/core" }
