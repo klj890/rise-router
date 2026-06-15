@@ -1,8 +1,10 @@
 # Rise Router 已实现功能与数据库设计（as-built）
 
-> 版本：v0.4 · 2026-06-14 · 本文记录**已落地的真实实现状态**（与设计蓝图 [data-model.md](./data-model.md)/[architecture.md](./architecture.md) 区分）。表结构取自运行库真实 schema。
+> 版本：v0.5 · 2026-06-15 · 本文记录**已落地的真实实现状态**（与设计蓝图 [data-model.md](./data-model.md)/[architecture.md](./architecture.md) 区分）。表结构取自运行库真实 schema。
 >
-> v0.4 增量（分支 `feat/m1-admin-crud`）：① 全套**管理台 CRUD**（8 实体 + 共享 admin 守卫）补齐 M1 退出标准的管理面；② **前端管理控制台**（数据驱动 CrudPage + 价格预览页）；③ 同步登记已合并的 **M2 财务**（钱包/订单/对账）端点与表。详见 §9/§12。
+> v0.5 增量（分支 `feat/m1-admin-crud`）：④ **用户注册登录**（手机号 + 短信验证码 + JWT 会话，自动建 org-of-one）；⑤ **RBAC**（roles/permissions/role_permissions/user_roles + `enforce` + 内置 seed），管理端点由临时 `X-Admin-Token` 收敛为 `require(perm)`（superadmin 令牌逃生通道 + 用户角色权限）+ 角色授予 API。详见 §9/§13。**M1（MVP）实质完成。**
+>
+> v0.4 增量：① 全套**管理台 CRUD**（8 实体 + 共享 admin 守卫）补齐 M1 退出标准的管理面；② **前端管理控制台**（数据驱动 CrudPage + 价格预览页）；③ 同步登记已合并的 **M2 财务**（钱包/订单/对账）端点与表。详见 §9/§12。
 
 ## 1. 本阶段已实现概览
 
@@ -19,8 +21,10 @@
 | **M2 财务** | 钱包（余额/授信/冻结）+ 充值入账 + 充值订单（mock 支付/幂等）+ 应收侧对账（周期聚合 + draft/locked 封账）| `backend/crates/billing` | ✅ main |
 | **管理台 CRUD** | 五要素 + 路由 + 身份共 8 实体的增删改查（admin 守卫）：channels/models/model_channels/groups/prices/discounts/organizations/api_keys | `backend/crates/{gateway,pricing,identity}` | ✅ 本片 |
 | **前端管理控制台** | 数据驱动 `CrudPage` + 字段描述符（8 实体）+ 价格预览页 + 管理令牌设置；`X-Admin-Token` 通道 | `frontend/shell/src/pages/admin/` | ✅ 本片 |
+| **用户登录** | 手机号 + 短信验证码注册/登录（mock 网关 + 60s 限流 + 5 次错码作废）→ JWT 会话；首登自动建 org-of-one；前端登录页接通 | `backend/crates/identity/src/session.rs`、`frontend/shell/src/pages/Login.tsx` | ✅ 本片 |
+| **RBAC** | roles/permissions/role_permissions/user_roles + `enforce` + 内置 seed + 引导首 admin；管理端点 `require(perm)`（superadmin 令牌逃生通道 + 用户角色）+ 角色授予 API | `backend/crates/rbac`、`backend/crates/identity/src/{guard,role_admin}.rs` | ✅ 本片 |
 
-**MVP 端到端可计费回路已闭合且可视化运营**：建组织→建分组→配渠道/模型/路由→配价/折扣→发密钥（明文一次）→价格预览→调用（relay）→扣费→看流水——全程管理台操作，不需手写 SQL。
+**MVP 端到端可计费回路已闭合且可视化运营**：建组织→建分组→配渠道/模型/路由→配价/折扣→发密钥（明文一次）→价格预览→调用（relay）→扣费→看流水——全程管理台操作，不需手写 SQL。用户经手机号+短信登录，管理端点按 RBAC 角色权限鉴权。
 
 ## 2. 已实现系统架构图
 
@@ -246,6 +250,9 @@ sequenceDiagram
 |---|---|---|
 | GET | `/healthz` · `/readyz` | 存活 / 就绪探针 |
 | POST | `/v1/chat/completions` | **OpenAI 兼容 relay**：鉴权→路由→失败转移→转发（非流式 + 流式 SSE）+ 同步计费 |
+| POST | `/api/identity/auth/send-code` | 发短信验证码（mock 回显 `dev_code` + 60s 限流）|
+| POST | `/api/identity/auth/login` | 验码登录/注册（首登建 org-of-one）→ 返回 JWT；错码 5 次作废 |
+| GET | `/api/identity/me` | Bearer 用户 JWT → 回显当前用户 + 组织 |
 | GET | `/api/identity/whoami` | Bearer 密钥 → 回显鉴权上下文（无密钥字段） |
 | GET | `/api/gateway/route?model=` | 路由预览：候选渠道按确定序 |
 | GET | `/api/pricing/preview?model=&group=` | 价格预览：base/final 单价 + 折扣明细 + version |
@@ -254,15 +261,17 @@ sequenceDiagram
 | POST/GET | `/api/billing/invoices`（M2 发票片，另分支）| 申请/看发票 |
 | GET | `/api/<域>/_ping` | rbac/task/report/crm/support 占位 |
 
-**管理侧（M2 财务，`X-Admin-Token` 守卫）**
+**管理侧（`require(perm)` 守卫：superadmin 令牌逃生通道 或 用户角色权限）**
 
-| 方法 | 路径 | 说明 |
-|---|---|---|
-| POST | `/api/billing/recharge` | 手动充值入账 |
-| POST/GET | `/api/billing/orders`、POST `…/{id}/confirm` | 充值订单 + mock 支付确认（幂等）|
-| POST/GET | `/api/billing/reconciliations`、GET `…/{id}`、POST `…/{id}/lock` | 周期对账生成/查/封账 |
+| 方法 | 路径 | 权限点 | 说明 |
+|---|---|---|---|
+| POST | `/api/billing/recharge` | billing.manage | 手动充值入账 |
+| POST/GET | `/api/billing/orders`、POST `…/{id}/confirm` | billing.manage | 充值订单 + mock 支付确认（幂等）|
+| POST/GET | `/api/billing/reconciliations`、GET/POST `…/{id}[/lock]` | billing.manage | 周期对账生成/查/封账 |
+| GET | `/api/identity/roles` · `/permissions` | rbac.manage | 列角色 / 权限点目录 |
+| GET/POST | `/api/identity/users/{id}/roles`、DELETE `…/{role_slug}` | rbac.manage | 查 / 授 / 撤用户角色 |
 
-**管理台 CRUD（`X-Admin-Token` 守卫；本片新增）**——每个实体均 `POST`(建) `GET`(列) + `GET/PUT/DELETE /{id}`：
+**管理台 CRUD（`require("<域>.manage")` 守卫；admin 角色或超管令牌可用）**——每个实体均 `POST`(建) `GET`(列) + `GET/PUT/DELETE /{id}`：
 
 | 基路径 | 实体 | 关键点 |
 |---|---|---|
@@ -277,16 +286,17 @@ sequenceDiagram
 
 ## 10. 工程清单
 
-- **crate**：`rise-core`（+ 共享 `admin_guard`）、`rise-entity`（13 表共享实体）、`rise-identity`、`rise-gateway`、`rise-pricing`、`rise-billing`（均已实现，含管理 CRUD）；`rbac/task/report/crm/support` 占位；`rise-server`、`migration`。
-- **迁移（14）**：`000001 groups`…`000010 widen_budget_precision`（M1）+ `000011 wallets` / `000012 transactions` / `000013 orders` / `000014 reconciliations`（M2）。
-- **测试**：后端 **56 单测**（pricing 16、gateway 18、identity 11、billing 10、core 1）。
-- **前端**：`frontend/shell/src/pages/admin/`（`CrudPage` 通用组件 + `resources.ts` 8 实体描述符 + `PricePreview` + `AdminTokenSettings`）；`src/api/admin.ts`（FK option 加载器 + 价格预览）；`tsc` + `vite build` 绿。
+- **crate**：`rise-core`（+ 共享 `admin_guard`/`admin_token_ok`）、`rise-entity`（**19 表**共享实体）、`rise-identity`（密钥鉴权 + 用户登录/JWT + `require` 守卫 + 角色授予）、`rise-gateway`、`rise-pricing`、`rise-billing`、`rise-rbac`（enforce + seed + 权限解析，已实现）；`task/report/crm/support` 占位；`rise-server`、`migration`。
+- **迁移（21）**：`000001`…`000010`（M1 定价/网关/身份/计费）+ `000011 wallets`…`000014 reconciliations`（M2 财务）+ `000015 users` / `000016 phone_codes` / `000017 roles` / `000018 permissions` / `000019 role_permissions` / `000020 user_roles` / `000021 add_phone_code_attempts`。
+- **测试**：后端 **61 单测**（pricing 16、gateway 18、identity 14、billing 10、rbac 2、core 1）。
+- **前端**：`frontend/shell/src/pages/admin/`（`CrudPage` 通用组件 + `resources.ts` 8 实体描述符 + `PricePreview` + `AdminTokenSettings`）；`Login.tsx`（手机号+短信登录）；`src/api/admin.ts`（FK option 加载器 + 价格预览）；`tsc` + `vite build` 绿。
 
 ## 11. 未实现 / 后续切片
 
-- **RBAC**（roles/permissions + `enforce` + App 权限点注册）——当前管理端点用临时 `X-Admin-Token` 守卫（`rise_core::admin_guard`），RBAC 落地后替换；org 维度折扣 FK。
-- **用户登录注册**（users + 手机号短信）——当前前端登录为占位，密钥经管理台发放。
-- **管理台增强**：可清空字段（如 api_key 预算/白名单）的 null 语义仅 org 维度支持；字段级 i18n（当前管理表单标签为中文直出）。
+- **RBAC 深化**：App 注册时声明权限点（apps 表/manifest，M5）；`user_roles.scope` 行级数据域（供报表 RLS）；superadmin 令牌逃生通道在 RBAC 完整运营后收紧/关闭。
+- **计费正确性（code-review 延后项）**：分档 `unit_prices` 的非价数值叶子会被 `scale_numeric` 随百分比折扣一并缩放（#4）；`prices.next_version` 读-改-写竞态，建议加 `(model,group,billing_unit,version)` 唯一约束（#6）。
+- **管理台增强**：非 org 维度可清空字段（api_key 预算/白名单、channel adapter_config、route priority/weight）的后端 null 清空仅 org 走 double_option；前端 FK 选项 useMemo 依赖键陈旧（#7）；字段级 i18n（表单标签中文直出）。
+- **登录/短信**：真实短信网关替换 mock（`deliver_sms`）并移除 `dev_code` 响应字段（配置开关）；微信等第三方登录走 `user_identities` 旁表；实名认证。
 - **多模态**：`/v1/tasks` 异步任务子系统（状态机 + 轮询/webhook + artifacts/S3）；渠道成本 → `cost_amount` 毛利。
 - relay：流式 usage 块对不设 include_usage 客户端的剥离（当前透传）；协议族适配器（anthropic/gemini/任务式）。
 
@@ -297,3 +307,20 @@ sequenceDiagram
 - **破坏性删除护栏**：FK 为 CASCADE/SET NULL 的实体（渠道/模型/分组/组织）删除前先查下游引用，命中返回 400 引导先清依赖或改用禁用/停用，杜绝静默级联删数据/改计费。
 - **五要素解耦不破**：价格走 `prices`（model×group，显式 jsonb 无倍率 + 版本化），折扣走独立 `discounts`，改价=建新版本，不联动其余四要素；管理台「价格预览」与计费热路径复用同一 `resolve_price`。
 - **前端**：数据驱动 `CrudPage<ResourceDef>`——一个组件 + 字段描述符渲染全部 8 实体的表格/表单（文本/数字/JSON/枚举/FK 下拉/开关/时间），避免 8 份重复页面。导航分 网关/定价/身份 三组子菜单 + 系统设置（外观 / 管理令牌）。
+
+## 13. 用户登录 + RBAC（v0.5 本片）
+
+### 13.1 手机号 + 短信验证码登录
+
+- **主通道**（国情）：`send-code`（生成 6 位码 → sha256(phone:code) 入库 `phone_codes` → mock 网关经 `dev_code` 回显 + 60s 发码冷却）→ `login`（取最近未消费未过期码比对哈希；**错码 +1，达 5 次作废**封死暴力枚举；通过则先查用户状态、被停用直接 403 不消费码，再消费码）。
+- 首次登录**事务建 org-of-one + user**（个人即一人组织，统一计费模型）；签发 **JWT 会话**（HS256，7 天，`RR_JWT_SECRET`）。
+- **两条独立鉴权路径**：用户 JWT 走 `/me`（`verify_request`）；api_key 走 `/whoami`（`verify_key`），互不接受对方令牌。`users` 实体不派生 serde（`password_hash` 凭据），对外 `UserView` 脱敏。
+
+### 13.2 RBAC（角色 / 权限点 / enforce / require 守卫）
+
+- **数据**：`roles`（内置 admin/finance/ops/sales/customer）× `permissions`（`gateway/pricing/identity/billing/rbac .manage`）经 `role_permissions` 连成角色权限；`user_roles` 挂 user（可带 `scope` 供报表 RLS）。权限点与角色以**代码常量为源**，`seed_builtins` 启动幂等落库（狗粮原则：内部模块也按 App 声明权限点）。
+- **解析**：`user_permissions(user_id)`（user_roles→role_permissions→codes）+ 纯函数 `enforce(perms, perm)`。
+- **守卫** `identity::require(state, headers, perm)` 两通道：① `X-Admin-Token`=superadmin 逃生通道直接放行（运维/引导）；② Bearer 用户 JWT → 解析权限 → `enforce`，缺权限 403。**~40 个管理端点**已由临时 `admin_guard` 收敛至 `require("<域>.manage")`。
+- **引导首 admin**：`RR_BOOTSTRAP_ADMIN_PHONE` 登录即幂等授 admin，破解"首个 admin 鸡生蛋"；再经角色授予 API（`require("rbac.manage")`）给其他用户授 finance/ops/sales。
+- **依赖方向** identity→rbac→core/entity 无环：`require`/JWT 留在 identity，rbac 保持纯逻辑+实体；角色授予 HTTP 端点放 `identity::role_admin`（避免 rbac→identity 循环）。
+- 内置角色权限矩阵：admin=全量；finance=billing+pricing；ops=gateway；sales=identity；customer=无。
