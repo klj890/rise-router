@@ -18,6 +18,10 @@ async fn main() -> anyhow::Result<()> {
     let db = match db::connect(&config.database_url).await {
         Ok(conn) => {
             tracing::info!("database connected");
+            // 幂等落地 RBAC 内置角色/权限点（重放安全）。失败仅告警不阻断启动。
+            if let Err(e) = rise_rbac::seed_builtins(&conn).await {
+                tracing::warn!(error = %e, "rbac seed_builtins failed; RBAC may be incomplete");
+            }
             Some(conn)
         }
         Err(e) => {

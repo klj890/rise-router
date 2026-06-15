@@ -12,6 +12,8 @@ pub struct Config {
     pub admin_token: Option<String>,
     /// 用户会话 JWT 签名密钥（手机号+短信登录签发 token）。未设则用户登录端点禁用（503）。
     pub jwt_secret: Option<String>,
+    /// 引导管理员手机号：该号登录时自动授予 admin 角色（解决 RBAC 首个 admin 的鸡生蛋）。
+    pub bootstrap_admin_phone: Option<String>,
 }
 
 impl Config {
@@ -24,6 +26,9 @@ impl Config {
             log_level: env::var("RR_LOG_LEVEL").unwrap_or_else(|_| "info".into()),
             admin_token: env::var("RR_ADMIN_TOKEN").ok().filter(|s| !s.is_empty()),
             jwt_secret: env::var("RR_JWT_SECRET").ok().filter(|s| !s.is_empty()),
+            bootstrap_admin_phone: env::var("RR_BOOTSTRAP_ADMIN_PHONE")
+                .ok()
+                .filter(|s| !s.is_empty()),
         }
     }
 }

@@ -2309,6 +2309,7 @@ dependencies = [
  "rand 0.8.6",
  "rise-core",
  "rise-entity",
+ "rise-rbac",
  "rust_decimal",
  "sea-orm",
  "serde",
@@ -2337,6 +2338,10 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "rise-core",
+ "rise-entity",
+ "sea-orm",
+ "serde",
+ "tracing",
 ]
 
 [[package]]

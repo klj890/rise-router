@@ -18,3 +18,4 @@ sha2.workspace = true
 rand.workspace = true
 jsonwebtoken.workspace = true
 tracing.workspace = true
+rise-rbac.workspace = true

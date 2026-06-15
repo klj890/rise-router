@@ -243,6 +243,13 @@ pub async fn login(
         }
     };
 
+    // 引导首个管理员：配置的引导手机号登录即自动授 admin（幂等）。失败仅告警不阻断登录。
+    if state.config.bootstrap_admin_phone.as_deref() == Some(phone.as_str()) {
+        if let Err(e) = rise_rbac::grant_role(db, user.id, "admin").await {
+            tracing::warn!(error = %e, "bootstrap admin grant failed");
+        }
+    }
+
     let token = sign_token(&secret, user.id, user.org_id, now)?;
     Ok(Json(LoginResp {
         token,
