@@ -74,30 +74,41 @@ fn render_reconciliation(m: &reconciliations::Model) -> Result<Vec<u8>, XlsxErro
             reconciliations::ReconStatus::Draft => "草稿",
             reconciliations::ReconStatus::Locked => "已封账",
         };
-        let dash = || "—".to_string();
-        let kv: [(&str, String); 8] = [
-            ("周期", m.period.clone()),
-            ("状态", status.to_string()),
-            ("应收营收", m.total_revenue.to_string()),
-            ("调用数", m.total_calls.to_string()),
-            (
-                "上游成本",
-                m.upstream_cost.map(|d| d.to_string()).unwrap_or_else(dash),
-            ),
-            (
-                "毛利缺口",
-                m.gap.map(|d| d.to_string()).unwrap_or_else(dash),
-            ),
-            ("生成时间", m.generated_at.to_rfc3339()),
-            (
-                "封账时间",
-                m.locked_at.map(|d| d.to_rfc3339()).unwrap_or_else(dash),
-            ),
-        ];
-        for (i, (k, v)) in kv.iter().enumerate() {
-            s.write_string_with_format(i as u32, 0, *k, &hf)?;
-            s.write_string(i as u32, 1, v)?;
+        // 标签列统一表头样式；值列按类型写：金额/计数用 write_number（Excel 可直接求和/透视，
+        // 不再出现「以文本存储的数字」绿三角），文本（周期/状态/时间）才用 write_string。
+        for (i, label) in [
+            "周期",
+            "状态",
+            "应收营收",
+            "调用数",
+            "上游成本",
+            "毛利缺口",
+            "生成时间",
+            "封账时间",
+        ]
+        .iter()
+        .enumerate()
+        {
+            s.write_string_with_format(i as u32, 0, *label, &hf)?;
         }
+        s.write_string(0, 1, &m.period)?;
+        s.write_string(1, 1, status)?;
+        s.write_number_with_format(2, 1, m.total_revenue.to_f64().unwrap_or(0.0), &mf)?;
+        s.write_number(3, 1, m.total_calls as f64)?;
+        // Option 数值：有值写 number（保留可计算性），无值写占位「—」。
+        match m.upstream_cost {
+            Some(c) => s.write_number_with_format(4, 1, c.to_f64().unwrap_or(0.0), &mf)?,
+            None => s.write_string(4, 1, "—")?,
+        };
+        match m.gap {
+            Some(g) => s.write_number_with_format(5, 1, g.to_f64().unwrap_or(0.0), &mf)?,
+            None => s.write_string(5, 1, "—")?,
+        };
+        s.write_string(6, 1, m.generated_at.to_rfc3339())?;
+        match m.locked_at {
+            Some(t) => s.write_string(7, 1, t.to_rfc3339())?,
+            None => s.write_string(7, 1, "—")?,
+        };
         s.set_column_width(0, 14.0)?;
         s.set_column_width(1, 30.0)?;
     }
@@ -133,6 +144,8 @@ fn render_margin(resp: &MarginResp) -> Result<Vec<u8>, XlsxError> {
     let s = wb.add_worksheet().set_name("毛利报表")?;
     let hf = header_fmt();
     let mf = money_fmt();
+    // 毛利率用百分比格式：底层仍存小数（如 0.4），Excel 显示 40.00%（可读且仍可计算）。
+    let pf = Format::new().set_num_format("0.00%");
 
     // 元信息区。
     s.write_string(0, 0, "周期")?;
@@ -173,7 +186,7 @@ fn render_margin(resp: &MarginResp) -> Result<Vec<u8>, XlsxError> {
         s.write_number_with_format(r, 2, cell.cost.to_f64().unwrap_or(0.0), &mf)?;
         s.write_number_with_format(r, 3, cell.gross_profit.to_f64().unwrap_or(0.0), &mf)?;
         match cell.margin_rate {
-            Some(rate) => s.write_number(r, 4, rate.to_f64().unwrap_or(0.0))?,
+            Some(rate) => s.write_number_with_format(r, 4, rate.to_f64().unwrap_or(0.0), &pf)?,
             None => s.write_string(r, 4, "—")?,
         };
         s.write_number(r, 5, cell.total_calls as f64)?;
