@@ -114,23 +114,34 @@ pub async fn create(
         }
     }
 
-    // order_id 软引用归属校验 + 防虚开：若指定，订单必须存在、属本 org、已支付，且开票额 ≤ 订单额。
-    // 杜绝「挂小额/他人/未支付订单开大额发票」的虚开风险（high）。纯余额开票（无 order_id）金额仍自报，
-    // 其总额 ≤ 净充值的强校验留财务策略后续片。
+    // order_id 软引用归属校验 + 防虚开：若指定，订单必须存在、属本 org、已支付，且**累计**开票额 ≤ 订单额。
+    // 杜绝「挂小额/他人/未支付订单开大额发票」及「对一笔订单反复开满额发票」的虚开风险（high）。
+    // 纯余额开票（无 order_id）金额仍自报，其总额 ≤ 净充值的强校验留财务策略后续片。
     if let Some(oid) = req.order_id {
         let order = orders::Entity::find_by_id(oid)
             .one(db)
             .await?
             .ok_or(AppError::NotFound)?;
+        // 他组织订单一律按「不存在」返回 404（不返回 403），消除跨租户订单 ID 枚举预言机。
         if order.org_id != ctx.org_id {
-            return Err(AppError::Forbidden);
+            return Err(AppError::NotFound);
         }
         if order.status != orders::OrderStatus::Paid {
             return Err(AppError::BadRequest("order is not paid".into()));
         }
-        if amount > order.amount {
+        // 累计防虚开：该订单已开（未作废）发票额之和 + 本次 ≤ 订单额。
+        // 低频开票下顺序校验足够；高并发累计竞态留唯一约束/串行化后续。
+        let prior_sum: Decimal = invoices::Entity::find()
+            .filter(invoices::Column::OrderId.eq(oid))
+            .filter(invoices::Column::Status.ne(invoices::InvoiceStatus::Voided))
+            .all(db)
+            .await?
+            .iter()
+            .map(|i| i.amount)
+            .sum();
+        if prior_sum + amount > order.amount {
             return Err(AppError::BadRequest(
-                "invoice amount exceeds order amount".into(),
+                "cumulative invoice amount exceeds order amount".into(),
             ));
         }
     }
