@@ -16,6 +16,13 @@ mod m20260613_000011_create_wallets;
 mod m20260613_000012_create_transactions;
 mod m20260613_000013_create_orders;
 mod m20260613_000014_create_reconciliations;
+mod m20260613_000015_create_users;
+mod m20260613_000016_create_phone_codes;
+mod m20260613_000017_create_roles;
+mod m20260613_000018_create_permissions;
+mod m20260613_000019_create_role_permissions;
+mod m20260613_000020_create_user_roles;
+mod m20260613_000021_add_phone_code_attempts;
 
 pub struct Migrator;
 
@@ -37,6 +44,13 @@ impl MigratorTrait for Migrator {
             Box::new(m20260613_000012_create_transactions::Migration),
             Box::new(m20260613_000013_create_orders::Migration),
             Box::new(m20260613_000014_create_reconciliations::Migration),
+            Box::new(m20260613_000015_create_users::Migration),
+            Box::new(m20260613_000016_create_phone_codes::Migration),
+            Box::new(m20260613_000017_create_roles::Migration),
+            Box::new(m20260613_000018_create_permissions::Migration),
+            Box::new(m20260613_000019_create_role_permissions::Migration),
+            Box::new(m20260613_000020_create_user_roles::Migration),
+            Box::new(m20260613_000021_add_phone_code_attempts::Migration),
         ]
     }
 }

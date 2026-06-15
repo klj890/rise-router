@@ -3,6 +3,9 @@
 //! 纯函数在 [`route`]（无 DB，单测覆盖）；[`resolve_route`] 是 DB 编排。
 //! 路由与定价完全分离：仅在 `models` 处相交，互不依赖。
 
+mod channel;
+mod model;
+mod model_channel;
 mod relay;
 mod route;
 
@@ -11,13 +14,18 @@ pub use route::{pick_weighted, rank_routes, weighted_failover_order, RouteCandid
 
 use axum::{
     extract::{Query, State},
-    routing::get,
+    routing::{get, post},
     Json, Router,
 };
 use rise_core::{AppError, AppResult, AppState};
 use rise_entity::{channels, model_channels, models};
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
+
+/// 已实现的协议族白名单。**新厂商若属已知协议族 = 纯配置接入**（建渠道选此值即可）；
+/// 全新协议族须先写适配器代码再加入此列表。渠道 CRUD 据此拒绝自由文本拼错。
+/// 目前 relay 仅按 OpenAI 风格转发，故只暴露 `openai_compatible`（覆盖绝大多数国产厂商）。
+pub const KNOWN_PROTOCOL_ADAPTERS: &[&str] = &["openai_compatible"];
 
 /// 给定模型 → 故障转移顺序的候选渠道（有效优先级/权重已算好）。
 pub async fn resolve_route(
@@ -65,6 +73,31 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/_ping", get(|| async { "gateway ok" }))
         .route("/route", get(route_preview))
+        // 渠道管理 CRUD（admin 守卫，凭据脱敏）
+        .route("/channels", post(channel::create).get(channel::list))
+        .route(
+            "/channels/{id}",
+            get(channel::get_one)
+                .put(channel::update)
+                .delete(channel::delete),
+        )
+        // 模型目录管理 CRUD（admin 守卫）
+        .route("/models", post(model::create).get(model::list))
+        .route(
+            "/models/{id}",
+            get(model::get_one).put(model::update).delete(model::delete),
+        )
+        // 路由线（model↔channel）管理 CRUD（admin 守卫）
+        .route(
+            "/model-channels",
+            post(model_channel::create).get(model_channel::list),
+        )
+        .route(
+            "/model-channels/{id}",
+            get(model_channel::get_one)
+                .put(model_channel::update)
+                .delete(model_channel::delete),
+        )
 }
 
 #[derive(Deserialize)]

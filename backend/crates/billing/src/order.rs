@@ -19,8 +19,6 @@ use sea_orm::{
 };
 use serde::Deserialize;
 
-use crate::admin_guard;
-
 #[derive(Deserialize)]
 pub struct CreateOrderReq {
     org_id: i32,
@@ -36,7 +34,7 @@ pub async fn create_order(
     headers: HeaderMap,
     Json(req): Json<CreateOrderReq>,
 ) -> AppResult<Json<orders::Model>> {
-    admin_guard(&state, &headers)?;
+    rise_identity::require(&state, &headers, "billing.manage").await?;
 
     let db = state.db()?;
     if rise_entity::organizations::Entity::find_by_id(req.org_id)
@@ -95,7 +93,7 @@ pub async fn confirm_order(
     Path(id): Path<i32>,
     Json(req): Json<ConfirmReq>,
 ) -> AppResult<Json<orders::Model>> {
-    admin_guard(&state, &headers)?;
+    rise_identity::require(&state, &headers, "billing.manage").await?;
     let db = state.db()?;
 
     // trade_no 列 varchar(128)：超长写库会报错 500，应用层先拦 400

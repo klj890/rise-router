@@ -3,13 +3,16 @@
 //! 纯函数在 [`resolve`]（无 DB，单测覆盖）；[`resolve_price`] 是 DB 编排。
 //! 管理台「价格预览」与网关计费热路径复用同一解析，保证所见即所得。
 
+mod discount;
+mod group;
+mod price;
 mod resolve;
 
 pub use resolve::{apply_discounts, select_price, AppliedDiscount, ResolvedPrice};
 
 use axum::{
     extract::{Query, State},
-    routing::get,
+    routing::{get, post},
     Json, Router,
 };
 use rise_core::{AppError, AppResult, AppState};
@@ -148,6 +151,26 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/_ping", get(|| async { "pricing ok" }))
         .route("/preview", get(preview))
+        // 商业分组管理 CRUD（admin 守卫）
+        .route("/groups", post(group::create).get(group::list))
+        .route(
+            "/groups/{id}",
+            get(group::get_one).put(group::update).delete(group::delete),
+        )
+        // 价格表管理 CRUD（admin 守卫，自动定版本号）
+        .route("/prices", post(price::create).get(price::list))
+        .route(
+            "/prices/{id}",
+            get(price::get_one).put(price::update).delete(price::delete),
+        )
+        // 折扣管理 CRUD（admin 守卫）
+        .route("/discounts", post(discount::create).get(discount::list))
+        .route(
+            "/discounts/{id}",
+            get(discount::get_one)
+                .put(discount::update)
+                .delete(discount::delete),
+        )
 }
 
 #[derive(Deserialize)]

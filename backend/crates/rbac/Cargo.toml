@@ -8,3 +8,7 @@ rust-version.workspace = true
 [dependencies]
 axum.workspace = true
 rise-core.workspace = true
+rise-entity.workspace = true
+sea-orm.workspace = true
+serde.workspace = true
+tracing.workspace = true
