@@ -16,6 +16,8 @@ mod m20260613_000011_create_wallets;
 mod m20260613_000012_create_transactions;
 mod m20260613_000013_create_orders;
 mod m20260613_000014_create_reconciliations;
+mod m20260613_000015_create_users;
+mod m20260613_000016_create_phone_codes;
 
 pub struct Migrator;
 
@@ -37,6 +39,8 @@ impl MigratorTrait for Migrator {
             Box::new(m20260613_000012_create_transactions::Migration),
             Box::new(m20260613_000013_create_orders::Migration),
             Box::new(m20260613_000014_create_reconciliations::Migration),
+            Box::new(m20260613_000015_create_users::Migration),
+            Box::new(m20260613_000016_create_phone_codes::Migration),
         ]
     }
 }

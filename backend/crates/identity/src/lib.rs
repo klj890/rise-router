@@ -1,11 +1,12 @@
-//! 身份与组织域：organizations / api_keys / 密钥鉴权（verify_key）。
+//! 身份与组织域：organizations / api_keys / users / 密钥鉴权（verify_key）+ 用户会话（手机号短信登录）。
 //!
 //! 纯校验在 [`auth`]（无 DB，单测覆盖）；[`verify_key`] 是 DB 编排，relay 鉴权复用。
-//! 用户登录/注册（users + 密码）作为后续 identity 子片。
+//! 用户注册/登录（手机号 + 短信验证码 + JWT 会话）在 [`session`]，与 api_key 鉴权两条独立路径。
 
 mod api_key;
 mod auth;
 mod organization;
+mod session;
 
 pub use auth::{evaluate_key, hash_key, KeyContext, KeyError};
 
@@ -59,6 +60,10 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/_ping", get(|| async { "identity ok" }))
         .route("/whoami", get(whoami))
+        // 用户会话：手机号 + 短信验证码注册/登录（公开）+ /me（用户 JWT）
+        .route("/auth/send-code", post(session::send_code))
+        .route("/auth/login", post(session::login))
+        .route("/me", get(session::me))
         // 组织管理 CRUD（admin 守卫）
         .route(
             "/organizations",
