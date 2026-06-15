@@ -14,20 +14,26 @@ declare module 'axios' {
 export const api = axios.create({ baseURL: '/' })
 
 api.interceptors.request.use((config) => {
-  const token = useAuthStore.getState().token
+  const { token, adminToken } = useAuthStore.getState()
   if (token) config.headers.Authorization = `Bearer ${token}`
+  // 管理令牌：存在即附带（非管理端点会忽略此头），供管理台 CRUD 走 admin_guard。
+  if (adminToken) config.headers['X-Admin-Token'] = adminToken
   config.headers['X-Locale'] = useLocaleStore.getState().locale
   return config
 })
 
-// 后端返回 error code + 参数；前端在此映射为当前 locale 的文案，挂到 error.localizedMessage。
+// 后端错误体两种形态：① code+params 对象（i18n 契约）② 纯字符串（当前多数端点 {"error":"..."}）。
+// 前者走 translateError 本地化；后者直接展示后端可读串；都没有再回落 UNKNOWN。
 api.interceptors.response.use(
   (resp) => resp,
   (error) => {
-    // 统一赋予本地化文案：UI 可无脑展示 error.localizedMessage（无标准错误体时回落 UNKNOWN）。
     if (error) {
-      const body = error.response?.data?.error as ApiErrorBody | undefined
-      error.localizedMessage = translateError(body)
+      const raw = error.response?.data?.error
+      if (typeof raw === 'string') {
+        error.localizedMessage = raw
+      } else {
+        error.localizedMessage = translateError(raw as ApiErrorBody | undefined)
+      }
     }
     return Promise.reject(error)
   },

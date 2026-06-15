@@ -1,16 +1,22 @@
-//! 身份与组织域：organizations / api_keys / 密钥鉴权（verify_key）。
+//! 身份与组织域：organizations / api_keys / users / 密钥鉴权（verify_key）+ 用户会话（手机号短信登录）。
 //!
 //! 纯校验在 [`auth`]（无 DB，单测覆盖）；[`verify_key`] 是 DB 编排，relay 鉴权复用。
-//! 用户登录/注册（users + 密码）作为后续 identity 子片。
+//! 用户注册/登录（手机号 + 短信验证码 + JWT 会话）在 [`session`]，与 api_key 鉴权两条独立路径。
 
+mod api_key;
 mod auth;
+mod guard;
+mod organization;
+mod role_admin;
+mod session;
 
 pub use auth::{evaluate_key, hash_key, KeyContext, KeyError};
+pub use guard::{require, Subject};
 
 use axum::{
     extract::State,
     http::{header::AUTHORIZATION, HeaderMap},
-    routing::get,
+    routing::{get, post},
     Json, Router,
 };
 use rise_core::{AppError, AppResult, AppState};
@@ -57,6 +63,40 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/_ping", get(|| async { "identity ok" }))
         .route("/whoami", get(whoami))
+        // 用户会话：手机号 + 短信验证码注册/登录（公开）+ /me（用户 JWT）
+        .route("/auth/send-code", post(session::send_code))
+        .route("/auth/login", post(session::login))
+        .route("/me", get(session::me))
+        // 组织管理 CRUD（admin 守卫）
+        .route(
+            "/organizations",
+            post(organization::create).get(organization::list),
+        )
+        .route(
+            "/organizations/{id}",
+            get(organization::get_one)
+                .put(organization::update)
+                .delete(organization::delete),
+        )
+        // 虚拟密钥管理 CRUD（admin 守卫；创建明文仅回显一次）
+        .route("/api-keys", post(api_key::create).get(api_key::list))
+        .route(
+            "/api-keys/{id}",
+            get(api_key::get_one)
+                .put(api_key::update)
+                .delete(api_key::delete),
+        )
+        // RBAC 角色授予管理（require "rbac.manage"）
+        .route("/roles", get(role_admin::list_roles))
+        .route("/permissions", get(role_admin::list_permissions))
+        .route(
+            "/users/{id}/roles",
+            get(role_admin::list_user_roles).post(role_admin::grant),
+        )
+        .route(
+            "/users/{id}/roles/{role_slug}",
+            axum::routing::delete(role_admin::revoke),
+        )
 }
 
 /// `GET /api/identity/whoami`（Bearer 密钥）—— 校验并回显鉴权上下文（无密钥字段）。

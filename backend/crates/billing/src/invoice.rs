@@ -19,8 +19,6 @@ use sea_orm::{
 };
 use serde::Deserialize;
 
-use crate::admin_guard;
-
 #[derive(Deserialize)]
 pub struct CreateReq {
     /// 软引用某笔充值订单（可选，为某笔充值开票）
@@ -205,7 +203,7 @@ pub async fn issue(
     headers: HeaderMap,
     Path(id): Path<i32>,
 ) -> AppResult<Json<invoices::Model>> {
-    admin_guard(&state, &headers)?;
+    rise_identity::require(&state, &headers, "billing.manage").await?;
     let db = state.db()?;
 
     let at = chrono::Utc::now().fixed_offset();
@@ -257,7 +255,7 @@ pub async fn void(
     headers: HeaderMap,
     Path(id): Path<i32>,
 ) -> AppResult<Json<invoices::Model>> {
-    admin_guard(&state, &headers)?;
+    rise_identity::require(&state, &headers, "billing.manage").await?;
     let db = state.db()?;
 
     let backend = db.get_database_backend();
