@@ -139,7 +139,8 @@ fn render_reconciliation(m: &reconciliations::Model) -> Result<Vec<u8>, XlsxErro
 }
 
 /// 渲染毛利报表 xlsx：元信息（周期/维度/成本完整）+ 明细行。
-fn render_margin(resp: &MarginResp) -> Result<Vec<u8>, XlsxError> {
+/// `pub(crate)`：月报邮件 cron 复用作附件，与导出端点同一渲染。
+pub(crate) fn render_margin(resp: &MarginResp) -> Result<Vec<u8>, XlsxError> {
     let mut wb = Workbook::new();
     let s = wb.add_worksheet().set_name("毛利报表")?;
     let hf = header_fmt();

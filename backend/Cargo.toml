@@ -55,6 +55,12 @@ rand = "0.8"
 async-stream = "0.3"
 futures-util = "0.3"
 rust_xlsxwriter = "0.92"
+lettre = { version = "0.11", default-features = false, features = [
+    "tokio1-rustls-tls",
+    "smtp-transport",
+    "builder",
+    "hostname",
+] }
 
 # internal crates
 rise-core = { path = "crates/core" }

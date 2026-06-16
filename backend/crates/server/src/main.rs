@@ -32,6 +32,12 @@ async fn main() -> anyhow::Result<()> {
 
     let bind_addr = config.bind_addr.clone();
     let state = AppState::new(config, db);
+
+    // 后台任务：月度毛利月报邮件 cron（仅 DB 连通且 RR_BILLING_EMAIL_ENABLED=true 时进入循环）。
+    if state.db.is_some() {
+        rise_billing::spawn_email_cron(state.clone());
+    }
+
     let app = build_router(state);
 
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;

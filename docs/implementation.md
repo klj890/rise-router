@@ -270,6 +270,7 @@ sequenceDiagram
 | POST/GET | `/api/billing/invoices`、POST `…/{id}/issue`·`…/{id}/void` | billing.manage | 发票申请/开票/作废（普票·专票）|
 | GET | `/api/billing/margin?period=&group_by=` | billing.manage | 毛利报表：营收−成本，周期聚合，可按 model/channel 下钻 |
 | GET | `/api/billing/margin/export`、`…/reconciliations/{id}/export` | billing.manage | 毛利 / 对账单 **xlsx 导出**（M2 片F·Part1）|
+| POST | `/api/billing/email/test` | billing.manage | 手动触发一次月度毛利月报（dry-run 不真发，回显组装结果）（M2 片F·Part2）|
 | GET | `/api/identity/roles` · `/permissions` | rbac.manage | 列角色 / 权限点目录 |
 | GET/POST | `/api/identity/users/{id}/roles`、DELETE `…/{role_slug}` | rbac.manage | 查 / 授 / 撤用户角色 |
 
@@ -289,8 +290,9 @@ sequenceDiagram
 ## 10. 工程清单
 
 - **crate**：`rise-core`（+ 共享 `admin_guard`/`admin_token_ok`）、`rise-entity`（**19 表**共享实体）、`rise-identity`（密钥鉴权 + 用户登录/JWT + `require` 守卫 + 角色授予）、`rise-gateway`、`rise-pricing`、`rise-billing`、`rise-rbac`（enforce + seed + 权限解析，已实现）；`task/report/crm/support` 占位；`rise-server`、`migration`。
-- **迁移（21）**：`000001`…`000010`（M1 定价/网关/身份/计费）+ `000011 wallets`…`000014 reconciliations`（M2 财务）+ `000015 users` / `000016 phone_codes` / `000017 roles` / `000018 permissions` / `000019 role_permissions` / `000020 user_roles` / `000021 add_phone_code_attempts`。
-- **测试**：后端 **71 单测**（pricing 16、gateway 18、identity 14、billing 20、rbac 2、core 1）。billing 含 charge 10 + margin 7（含超大年份回归）+ export 3（xlsx 渲染 zip-magic smoke test）。
+- **迁移（23）**：`000001`…`000010`（M1 定价/网关/身份/计费）+ `000011 wallets`…`000014 reconciliations`（M2 财务）+ `000015 users` / `000016 phone_codes` / `000017 roles` / `000018 permissions` / `000019 role_permissions` / `000020 user_roles` / `000021 add_phone_code_attempts` / `000022 invoices` / `000023 cron_state`（后台任务防重 KV）。
+- **测试**：后端 **75 单测**（pricing 16、gateway 18、identity 14、billing 24、rbac 2、core 1）。billing 含 charge 10 + margin 7（含超大年份回归）+ export 3（xlsx zip-magic smoke）+ email_cron 4（prev_period / sent_this_month 防重 / build_html / should_send 自愈）。
+- **后台任务**：`rise_billing::spawn_email_cron`（main.rs 在 DB 连通时启动）——月度毛利月报邮件 cron（lettre SMTP；`RR_BILLING_EMAIL_ENABLED` 开关；**自愈式触发** now≥本月预定时间即补发，`cron_state` 防重，dry-run 支持）。
 - **前端**：`frontend/shell/src/pages/admin/`（`CrudPage` 通用组件 + `resources.ts` 8 实体描述符 + `PricePreview` + `AdminTokenSettings`）；`Login.tsx`（手机号+短信登录）；`src/api/admin.ts`（FK option 加载器 + 价格预览）；`tsc` + `vite build` 绿。
 
 ## 11. 未实现 / 后续切片
@@ -299,7 +301,7 @@ sequenceDiagram
 - **计费正确性（code-review 延后项）**：`prices.next_version` 读-改-写竞态，建议加 `(model,group,billing_unit,version)` 唯一约束（#6，低概率、需表达式索引处理 NULL group）。〔#4 分档单价被折扣污染已修：unit_prices 收紧为扁平数值映射，分档定价待专门结构。〕
 - **管理台增强**：非 org 维度可清空字段（api_key 预算/白名单、channel adapter_config、route priority/weight）的后端 null 清空仅 org 走 double_option；字段级 i18n（表单标签中文直出）。〔#7 前端 FK 选项 memo 陈旧已修。〕
 - **登录/短信**：真实短信网关替换 mock（`deliver_sms`）并移除 `dev_code` 响应字段（配置开关）；微信等第三方登录走 `user_identities` 旁表；实名认证。
-- **财务报表导出/账单**：xlsx 导出已落对账单 / 毛利（片F·Part1，纯 ASCII 文件名 + 渲染纯函数）；**月度账单邮件 cron（片F·Part2）待做**——SMTP/收件人/开关走环境变量（`RR_SMTP_*` / `RR_BILLING_EMAIL_*`，私有化部署运维配置），仅新增极简 `cron_state(key, value, updated_at)` 表防重发，不建通用 settings 基建；客户流水（usage）明细导出随 Part2 一并设计（全量 vs 分页量级）。
+- **财务报表导出/账单（片F 已落）**：xlsx 导出对账单 / 毛利（Part1）+ 月度毛利月报邮件 cron（Part2，lettre + `cron_state` 防重 + dry-run）。SMTP/收件人/开关走环境变量（`RR_SMTP_*` / `RR_BILLING_EMAIL_*`），不建通用 settings 基建。**仍待做**：① per-org 客户账单邮件——org 无邮箱字段，需 M3 CRM 给 org 加邮箱 + 通知子系统；② 客户流水（usage）明细导出（全量 vs 分页量级设计）；③ identity `jwt_secret` 未配时 `require` 返回 500 应为 503（既有小瑕疵，影响所有管理端点，非本片引入）。
 - **多模态**：`/v1/tasks` 异步任务子系统（状态机 + 轮询/webhook + artifacts/S3）；渠道成本 → `cost_amount` 毛利。
 - relay：流式 usage 块对不设 include_usage 客户端的剥离（当前透传）；协议族适配器（anthropic/gemini/任务式）。
 
