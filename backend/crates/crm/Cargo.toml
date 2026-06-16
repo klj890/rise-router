@@ -10,6 +10,7 @@ axum.workspace = true
 rise-core.workspace = true
 rise-entity.workspace = true
 rise-identity.workspace = true
+rise-billing.workspace = true
 sea-orm.workspace = true
 serde.workspace = true
 rust_decimal.workspace = true

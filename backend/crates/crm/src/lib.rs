@@ -1,6 +1,7 @@
 //! CRM 与销售域（M3）。
 //!
 //! 片 A：客户档案（org + 钱包 + 归属销售）、跟进记录、归属变更历史。
+//! 片 B：销售代客开户（事务建 org+user+首条归属）、代客充值（一步 Paid 订单 + 入账，业绩归因）。
 //!
 //! **数据域隔离在端点层**（M3；完整 RLS 引擎留 M4）：销售（`crm.read`/`crm.write`，无
 //! `crm.read.all`）仅见/操作自己名下客户（`owner_sales_id` = 本人）；管理员/财务（`crm.read.all`）
@@ -16,12 +17,17 @@ use rise_core::AppState;
 mod assignment;
 mod customer;
 mod note;
+mod onboard;
+mod recharge;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/_ping", get(|| async { "crm ok" }))
-        // 客户档案（org + 钱包余额 + 归属销售；数据域过滤）
-        .route("/customers", get(customer::list))
+        // 客户档案（列表/详情，数据域过滤）+ 代客开户（事务建 org+user+首条归属）
+        .route(
+            "/customers",
+            get(customer::list).post(onboard::create_customer),
+        )
         .route("/customers/{org_id}", get(customer::get_one))
         // 跟进记录（org 内倒序游标分页 + 新增）
         .route(
@@ -31,4 +37,6 @@ pub fn routes() -> Router<AppState> {
         // 归属变更历史 + 改派
         .route("/customers/{org_id}/assignments", get(assignment::history))
         .route("/customers/{org_id}/assign", post(assignment::assign))
+        // 代客充值（一步 Paid 订单 + 入账，数据域校验）
+        .route("/customers/{org_id}/recharge", post(recharge::recharge))
 }
