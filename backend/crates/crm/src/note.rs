@@ -66,7 +66,9 @@ fn validate_content(raw: &str) -> AppResult<String> {
     }
     // 双重快速预检防 CPU 耗尽：① 按字节短路（UTF-8 每字符 ≥1 字节，bytes > MAX*4 必超长，O(1)）；
     // ② chars().take(MAX+1) 数够即止，最坏 O(MAX) 而非对超大输入做 O(N) 全量计数。
-    if content.len() > MAX_NOTE_LEN * 4 || content.chars().take(MAX_NOTE_LEN + 1).count() > MAX_NOTE_LEN {
+    if content.len() > MAX_NOTE_LEN * 4
+        || content.chars().take(MAX_NOTE_LEN + 1).count() > MAX_NOTE_LEN
+    {
         return Err(AppError::BadRequest(format!(
             "content too long (max {MAX_NOTE_LEN})"
         )));
