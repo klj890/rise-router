@@ -1,14 +1,15 @@
 //! 月度毛利月报 cron（M2 片F·Part2）。
 //!
-//! 每分钟 tick：到配置的「每月 day 号 hour 点」（CST/UTC+8）且本月未发 → 取**上月**毛利
+//! 每分钟 tick：到/过本月预定时间「day 号 hour 点」（CST/UTC+8）且本月未发 → 取**上月**毛利
 //! （[`compute_margin`]）→ HTML 正文 + xlsx 附件（[`render_margin`]）→ SMTP 发送
 //! → 写 `cron_state` 防重（进程重启不重发）。
 //!
 //! org 无邮箱字段，本报是「平台全量毛利月报」发给固定财务收件人；per-org 客户账单留 M3。
-//! 时间一律按 CST 判断（与运维直觉一致）；触发小时内多次 tick 由防重保证只发一次。
+//! **自愈式触发**：判定用「now ≥ 本月预定时间」而非精确小时匹配——窗口内宕机 / DB / SMTP
+//! 故障后，当月任意时刻重启都会补发；cron_state 防重保证只发一次。时间一律按 CST 判断。
 
 use axum::{extract::State, http::HeaderMap, Json};
-use chrono::{Datelike, FixedOffset, TimeZone, Timelike, Utc};
+use chrono::{DateTime, Datelike, FixedOffset, TimeZone, Utc};
 use rise_core::{AppError, AppResult, AppState};
 use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
@@ -47,17 +48,14 @@ pub fn spawn(state: AppState) {
 async fn tick(state: &AppState) -> AppResult<()> {
     let cfg = &state.config.billing_email;
     let now = Utc::now().with_timezone(&cst());
-    if now.day() != cfg.day || now.hour() != cfg.hour {
-        return Ok(());
-    }
     let db = state.db()?;
     let last = get_state(db, LAST_SENT_KEY)
         .await?
         .and_then(|s| s.parse::<i64>().ok());
-    if sent_this_month(last, now.timestamp()) {
+    if !should_send(now, cfg.day, cfg.hour, last) {
         return Ok(());
     }
-    tracing::info!("billing email cron: firing monthly report");
+    tracing::info!("billing email cron: firing monthly report (now >= scheduled, not yet sent)");
     let outcome = run_send(state).await?;
     set_state(db, LAST_SENT_KEY, &now.timestamp().to_string()).await?;
     tracing::info!(
@@ -67,6 +65,20 @@ async fn tick(state: &AppState) -> AppResult<()> {
         outcome.dry_run
     );
     Ok(())
+}
+
+/// 是否应发本月月报：到/过本月预定时间（day 号 hour 点，CST）且本月未发。
+///
+/// 自愈式——窗口内宕机 / DB / SMTP 故障后，当月任意时刻重启都会补发；`cron_state` 防重
+/// （[`sent_this_month`]）保证只发一次。`day`/`hour` 已在 config 规范化到合法范围。
+fn should_send(now: DateTime<FixedOffset>, day: u32, hour: u32, last_sent: Option<i64>) -> bool {
+    let Some(scheduled) = cst()
+        .with_ymd_and_hms(now.year(), now.month(), day, hour, 0, 0)
+        .single()
+    else {
+        return false; // 理论不达（config 已规范化 day≤28 / hour≤23）
+    };
+    now >= scheduled && !sent_this_month(last_sent, now.timestamp())
 }
 
 /// 一次月报发送的结果（test 端点回显 / cron 记日志用）。
@@ -286,6 +298,27 @@ mod tests {
         assert!(sent_this_month(Some(ts), same_month)); // 同月 → 已发
         assert!(!sent_this_month(Some(ts), next_month)); // 跨月 → 可发
         assert!(!sent_this_month(None, same_month)); // 从未发 → 可发
+    }
+
+    #[test]
+    fn should_send_self_heals_and_dedups() {
+        let at = |m, d, h| {
+            cst()
+                .with_ymd_and_hms(2026, m, d, h, 0, 0)
+                .single()
+                .unwrap()
+        };
+        let ts = |dt: DateTime<FixedOffset>| dt.timestamp();
+        // 未到本月预定时间（6-01 09:00 之前）→ 不发
+        assert!(!should_send(at(6, 1, 8), 1, 9, None));
+        // 到点且本月未发 → 发
+        assert!(should_send(at(6, 1, 9), 1, 9, None));
+        // 月中开机、本月未发（预定窗口内曾宕机）→ 补发（自愈）
+        assert!(should_send(at(6, 15, 3), 1, 9, None));
+        // 本月已发 → 跳过（防重），即便月中多次 tick
+        assert!(!should_send(at(6, 15, 3), 1, 9, Some(ts(at(6, 1, 9)))));
+        // 上月发过、本月到点 → 发（跨月）
+        assert!(should_send(at(6, 1, 9), 1, 9, Some(ts(at(5, 1, 9)))));
     }
 
     #[test]
