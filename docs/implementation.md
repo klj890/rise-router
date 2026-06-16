@@ -304,7 +304,7 @@ sequenceDiagram
 
 - **crate**：`rise-core`（+ 共享 `admin_guard`/`admin_token_ok`）、`rise-entity`（**21 表**共享实体）、`rise-identity`（密钥鉴权 + 用户登录/JWT + `require`/`require_scoped` 守卫 + 角色授予）、`rise-gateway`、`rise-pricing`、`rise-billing`、`rise-rbac`（enforce + seed + 权限解析）、`rise-crm`（客户档案 + 跟进 + 归属，数据域隔离）；`task/report/support` 占位；`rise-server`、`migration`。
 - **迁移（25）**：`000001`…`000010`（M1 定价/网关/身份/计费）+ `000011 wallets`…`000014 reconciliations`（M2 财务）+ `000015 users` / `000016 phone_codes` / `000017 roles` / `000018 permissions` / `000019 role_permissions` / `000020 user_roles` / `000021 add_phone_code_attempts` / `000022 invoices` / `000023 cron_state`（后台任务防重 KV）+ `000024 customer_notes` / `000025 customer_assignments`（M3 CRM）。
-- **测试**：后端 **76 单测**（pricing 16、gateway 18、identity 14、billing 24、rbac 2、crm 1、core 1）。billing 含 charge 10 + margin 7（含超大年份回归）+ export 3（xlsx zip-magic smoke）+ email_cron 4（prev_period / sent_this_month 防重 / build_html / should_send 自愈）。M3 片A 另经 19 项端到端 smoke（数据域读/写隔离、改派事务/幂等/历史、404 不泄露、幽灵 sales 校验）。
+- **测试**：后端 **76 单测**（pricing 16、gateway 18、identity 14、billing 24、rbac 2、crm 1、core 1）。billing 含 charge 10 + margin 7（含超大年份回归）+ export 3（xlsx zip-magic smoke）+ email_cron 4（prev_period / sent_this_month 防重 / build_html / should_send 自愈）。M3 片A 另经 19 项端到端 smoke（已脚本化 `backend/scripts/smoke_crm.sh`，自起自停 server，实测 19/19；数据域读/写隔离、改派事务/幂等/历史、404 不泄露、幽灵 sales 校验）。
 - **后台任务**：`rise_billing::spawn_email_cron`（main.rs 在 DB 连通时启动）——月度毛利月报邮件 cron（lettre SMTP；`RR_BILLING_EMAIL_ENABLED` 开关；**自愈式触发** now≥本月预定时间即补发，`cron_state` 防重，dry-run 支持）。
 - **前端**：`frontend/shell/src/pages/admin/`（`CrudPage` 通用组件 + `resources.ts` 8 实体描述符 + `PricePreview` + `AdminTokenSettings`）；`Login.tsx`（手机号+短信登录）；`src/api/admin.ts`（FK option 加载器 + 价格预览）；`tsc` + `vite build` 绿。
 
@@ -370,4 +370,4 @@ sequenceDiagram
 
 - `cargo fmt` / `clippy` 干净；`crm` 单测 1（跟进内容 trim + 长度边界，含中文计 char 数）；全 workspace 编译 + 76 单测绿。
 - 迁移 `up` / `down -n 2` / 再 `up` 对称验证（真实 PG）；表结构、FK CASCADE、复合索引、`active` 默认值与设计一致。
-- 19 项端到端 smoke（真实 server + 超管令牌 + 两个 sales JWT）：assign 归属、销售列表仅本人名下、越域客户/跟进 404、跟进 author 归属、空内容 400、归属历史、幂等 assign 不增历史、改派后历史 2 条仅 1 active、改派后可见性翻转、幽灵 sales 400、超管全量。
+- 19 项端到端 smoke **已固化为 `backend/scripts/smoke_crm.sh`**（自起/自停 server + 灌数据 + 19 断言，可重跑、可入 CI；实测 19/19 绿）：assign 归属、销售列表仅本人名下、越域客户/跟进 404、跟进 author 归属、空内容 400、归属历史、幂等 assign 不增历史、改派后历史 2 条仅 1 active、改派后可见性翻转、幽灵 sales 400、超管全量。
