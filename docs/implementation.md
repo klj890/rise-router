@@ -1,6 +1,8 @@
 # Rise Router 已实现功能与数据库设计（as-built）
 
-> 版本：v0.5 · 2026-06-15 · 本文记录**已落地的真实实现状态**（与设计蓝图 [data-model.md](./data-model.md)/[architecture.md](./architecture.md) 区分）。表结构取自运行库真实 schema。
+> 版本：v0.6 · 2026-06-16 · 本文记录**已落地的真实实现状态**（与设计蓝图 [data-model.md](./data-model.md)/[architecture.md](./architecture.md) 区分）。表结构取自运行库真实 schema。
+>
+> v0.6 增量（分支 `feat/m3-crm-foundation`）：⑧ **M3 CRM 片A** —— 客户档案（org + 钱包余额 + 归属销售）、跟进记录（`customer_notes`）、归属变更历史（`customer_assignments`：事务改派 + 业绩归因轨迹）。新增 RBAC 权限点 `crm.read`/`crm.read.all`/`crm.write`/`crm.assign` + **端点层数据域隔离**（销售仅见/操作自己名下客户，管理员/财务/超管令牌全量）。详见 §14。
 >
 > v0.5 增量（分支 `feat/m1-admin-crud`）：④ **用户注册登录**（手机号 + 短信验证码 + JWT 会话，自动建 org-of-one）；⑤ **RBAC**（roles/permissions/role_permissions/user_roles + `enforce` + 内置 seed），管理端点由临时 `X-Admin-Token` 收敛为 `require(perm)`（superadmin 令牌逃生通道 + 用户角色权限）+ 角色授予 API。详见 §9/§13。**M1（MVP）实质完成。**
 >
@@ -22,7 +24,8 @@
 | **管理台 CRUD** | 五要素 + 路由 + 身份共 8 实体的增删改查（admin 守卫）：channels/models/model_channels/groups/prices/discounts/organizations/api_keys | `backend/crates/{gateway,pricing,identity}` | ✅ 本片 |
 | **前端管理控制台** | 数据驱动 `CrudPage` + 字段描述符（8 实体）+ 价格预览页 + 管理令牌设置；`X-Admin-Token` 通道 | `frontend/shell/src/pages/admin/` | ✅ 本片 |
 | **用户登录** | 手机号 + 短信验证码注册/登录（mock 网关 + 60s 限流 + 5 次错码作废）→ JWT 会话；首登自动建 org-of-one；前端登录页接通 | `backend/crates/identity/src/session.rs`、`frontend/shell/src/pages/Login.tsx` | ✅ 本片 |
-| **RBAC** | roles/permissions/role_permissions/user_roles + `enforce` + 内置 seed + 引导首 admin；管理端点 `require(perm)`（superadmin 令牌逃生通道 + 用户角色）+ 角色授予 API | `backend/crates/rbac`、`backend/crates/identity/src/{guard,role_admin}.rs` | ✅ 本片 |
+| **RBAC** | roles/permissions/role_permissions/user_roles + `enforce` + 内置 seed + 引导首 admin；管理端点 `require(perm)`（superadmin 令牌逃生通道 + 用户角色）+ 角色授予 API | `backend/crates/rbac`、`backend/crates/identity/src/{guard,role_admin}.rs` | ✅ main |
+| **M3 CRM 片A** | 客户档案（org + 钱包余额 + 归属销售）+ 跟进记录 + 归属变更历史（事务改派 / 业绩归因轨迹）；新增 `require_scoped`→`Access` **端点层数据域隔离**（销售仅见自己名下） | `backend/crates/crm`、`backend/crates/identity/src/guard.rs`、`migration` | ✅ 本片 |
 
 **MVP 端到端可计费回路已闭合且可视化运营**：建组织→建分组→配渠道/模型/路由→配价/折扣→发密钥（明文一次）→价格预览→调用（relay）→扣费→看流水——全程管理台操作，不需手写 SQL。用户经手机号+短信登录，管理端点按 RBAC 角色权限鉴权。
 
@@ -258,7 +261,7 @@ sequenceDiagram
 | GET | `/api/pricing/preview?model=&group=` | 价格预览：base/final 单价 + 折扣明细 + version |
 | GET | `/api/billing/usage?limit=&cursor=` | 看流水：本 org 计费明细，游标分页 |
 | GET | `/api/billing/wallet` | 看本 org 钱包（余额/授信/冻结/可用）|
-| GET | `/api/<域>/_ping` | rbac/task/report/crm/support 占位 |
+| GET | `/api/<域>/_ping` | rbac/task/report/support 占位 |
 
 **管理侧（`require(perm)` 守卫：superadmin 令牌逃生通道 或 用户角色权限）**
 
@@ -287,16 +290,27 @@ sequenceDiagram
 | `/api/identity/organizations` | 组织 | group_id/owner_sales_id 三态部分更新；删除查 key/钱包/订单引用 |
 | `/api/identity/api-keys` | 虚拟密钥 | 生成 `sk-rr-…` 明文**仅回显一次**，库存 sha256；`ApiKeyView` 脱敏 |
 
+**CRM（M3 片A，`require_scoped` 数据域隔离：销售仅本人名下，管理员/财务/超管令牌全量）**
+
+| 方法 | 路径 | 权限点 | 说明 |
+|---|---|---|---|
+| GET | `/api/crm/customers?owner_sales_id=&limit=&cursor=` | crm.read[.all] | 客户列表：org + 钱包余额/授信/冻结 + 归属销售；id 升序游标分页 |
+| GET | `/api/crm/customers/{org_id}` | crm.read[.all] | 客户详情；越域访问 404（不泄露存在性）|
+| GET/POST | `/api/crm/customers/{org_id}/notes` | crm.read[.all] / crm.write | 跟进记录列表（倒序游标）/ 新增（author_id 取操作者）|
+| GET | `/api/crm/customers/{org_id}/assignments` | crm.read[.all] | 归属变更历史，id 倒序 |
+| POST | `/api/crm/customers/{org_id}/assign` | crm.assign | 改派归属（事务：关旧 active 行 + 插新行 + 改 owner_sales_id；幂等 no-op；幽灵 sales 400）|
+
 ## 10. 工程清单
 
-- **crate**：`rise-core`（+ 共享 `admin_guard`/`admin_token_ok`）、`rise-entity`（**19 表**共享实体）、`rise-identity`（密钥鉴权 + 用户登录/JWT + `require` 守卫 + 角色授予）、`rise-gateway`、`rise-pricing`、`rise-billing`、`rise-rbac`（enforce + seed + 权限解析，已实现）；`task/report/crm/support` 占位；`rise-server`、`migration`。
-- **迁移（23）**：`000001`…`000010`（M1 定价/网关/身份/计费）+ `000011 wallets`…`000014 reconciliations`（M2 财务）+ `000015 users` / `000016 phone_codes` / `000017 roles` / `000018 permissions` / `000019 role_permissions` / `000020 user_roles` / `000021 add_phone_code_attempts` / `000022 invoices` / `000023 cron_state`（后台任务防重 KV）。
-- **测试**：后端 **75 单测**（pricing 16、gateway 18、identity 14、billing 24、rbac 2、core 1）。billing 含 charge 10 + margin 7（含超大年份回归）+ export 3（xlsx zip-magic smoke）+ email_cron 4（prev_period / sent_this_month 防重 / build_html / should_send 自愈）。
+- **crate**：`rise-core`（+ 共享 `admin_guard`/`admin_token_ok`）、`rise-entity`（**21 表**共享实体）、`rise-identity`（密钥鉴权 + 用户登录/JWT + `require`/`require_scoped` 守卫 + 角色授予）、`rise-gateway`、`rise-pricing`、`rise-billing`、`rise-rbac`（enforce + seed + 权限解析）、`rise-crm`（客户档案 + 跟进 + 归属，数据域隔离）；`task/report/support` 占位；`rise-server`、`migration`。
+- **迁移（25）**：`000001`…`000010`（M1 定价/网关/身份/计费）+ `000011 wallets`…`000014 reconciliations`（M2 财务）+ `000015 users` / `000016 phone_codes` / `000017 roles` / `000018 permissions` / `000019 role_permissions` / `000020 user_roles` / `000021 add_phone_code_attempts` / `000022 invoices` / `000023 cron_state`（后台任务防重 KV）+ `000024 customer_notes` / `000025 customer_assignments`（M3 CRM）。
+- **测试**：后端 **76 单测**（pricing 16、gateway 18、identity 14、billing 24、rbac 2、crm 1、core 1）。billing 含 charge 10 + margin 7（含超大年份回归）+ export 3（xlsx zip-magic smoke）+ email_cron 4（prev_period / sent_this_month 防重 / build_html / should_send 自愈）。M3 片A 另经 19 项端到端 smoke（数据域读/写隔离、改派事务/幂等/历史、404 不泄露、幽灵 sales 校验）。
 - **后台任务**：`rise_billing::spawn_email_cron`（main.rs 在 DB 连通时启动）——月度毛利月报邮件 cron（lettre SMTP；`RR_BILLING_EMAIL_ENABLED` 开关；**自愈式触发** now≥本月预定时间即补发，`cron_state` 防重，dry-run 支持）。
 - **前端**：`frontend/shell/src/pages/admin/`（`CrudPage` 通用组件 + `resources.ts` 8 实体描述符 + `PricePreview` + `AdminTokenSettings`）；`Login.tsx`（手机号+短信登录）；`src/api/admin.ts`（FK option 加载器 + 价格预览）；`tsc` + `vite build` 绿。
 
 ## 11. 未实现 / 后续切片
 
+- **CRM 后续片（M3）**：片B 销售**代客开户**（事务建 org + user + 首条 assignment）+ **代客充值**（复用 billing 充值，`orders.created_by_sales_id`）；片C **业绩归因聚合**（按 `owner_sales_id` 聚合 `orders` 充值额 / `usage_logs` 消费额，周期过滤 + 下钻）；片D 前端 CRM 控制台。片A 数据域隔离走**端点层 `require_scoped`**（销售=本人名下边界）；完整 RLS 引擎（`user_roles.scope` 注入 + 报表四角色）仍留 M4。`organizations` 邮箱字段（per-org 客户账单邮件前置，见下条财务）亦待片B/后续补。
 - **RBAC 深化**：App 注册时声明权限点（apps 表/manifest，M5）；`user_roles.scope` 行级数据域（供报表 RLS）；superadmin 令牌逃生通道在 RBAC 完整运营后收紧/关闭；`seed_builtins` 目前仅插入不回收——将来从目录删除权限点时需补对账清理（当前只增不删，安全）。
 - **计费正确性（code-review 延后项）**：`prices.next_version` 读-改-写竞态，建议加 `(model,group,billing_unit,version)` 唯一约束（#6，低概率、需表达式索引处理 NULL group）。〔#4 分档单价被折扣污染已修：unit_prices 收紧为扁平数值映射，分档定价待专门结构。〕
 - **管理台增强**：非 org 维度可清空字段（api_key 预算/白名单、channel adapter_config、route priority/weight）的后端 null 清空仅 org 走 double_option；字段级 i18n（表单标签中文直出）。〔#7 前端 FK 选项 memo 陈旧已修。〕
@@ -328,4 +342,32 @@ sequenceDiagram
 - **守卫** `identity::require(state, headers, perm)` 两通道：① `X-Admin-Token`=superadmin 逃生通道直接放行（运维/引导）；② Bearer 用户 JWT → 解析权限 → `enforce`，缺权限 403。**~40 个管理端点**已由临时 `admin_guard` 收敛至 `require("<域>.manage")`。
 - **引导首 admin**：`RR_BOOTSTRAP_ADMIN_PHONE` 登录即幂等授 admin，破解"首个 admin 鸡生蛋"；再经角色授予 API（`require("rbac.manage")`）给其他用户授 finance/ops/sales。
 - **依赖方向** identity→rbac→core/entity 无环：`require`/JWT 留在 identity，rbac 保持纯逻辑+实体；角色授予 HTTP 端点放 `identity::role_admin`（避免 rbac→identity 循环）。
-- 内置角色权限矩阵：admin=全量；finance=billing+pricing；ops=gateway；sales=identity；customer=无。
+- 内置角色权限矩阵：admin=全量；finance=billing+pricing+crm.read(.all)；ops=gateway；sales=identity+crm.read+crm.write；customer=无。
+
+## 14. M3 CRM 片A：客户档案 + 跟进 + 归属（本片）
+
+### 14.1 数据模型（2 张新表）
+
+- **`customer_notes`**（`org_id` FK→organizations CASCADE，`author_id` 软引用 users 可空，`content` text，`created_at`）：客户跟进记录。`author_id` 不建 FK——用户注销不应连带删历史跟进，超管令牌（无用户上下文）创建时为空。复合索引 `(org_id, id)` 支撑 org 内倒序游标分页。
+- **`customer_assignments`**（`org_id` FK→organizations CASCADE，`sales_id` 软引用 users，`assigned_at`，`active` bool 默认 true）：归属**变更轨迹**（业绩归因 / 审计）。`organizations.owner_sales_id` 仍是当前归属**真相源**；本表每次改派关旧 active 行 + 插新 active 行，可回放归属历史。
+
+> 两表均 `org_id` CASCADE、销售/作者软引用（不建 FK），与既有 `orders.created_by_sales_id` / `organizations.owner_sales_id` 软引用风格一致。
+
+### 14.2 端点层数据域隔离（`require_scoped` → `Access`）
+
+- 第一性原则：销售看到别人客户 = 越权。M3 在**端点层**强制行级过滤（完整 RLS 引擎留 M4），新增 `identity::require_scoped(state, headers, base_perm, all_perm) → Access`：
+  - 超管令牌 → `Access` 全量（无用户上下文，`actor_id`=None）；
+  - 用户 JWT：具 `all_perm` → 全量；仅具 `base_perm` → 限本人名下（携带 `user_id`/`org_id`）；都无 → 403。
+- `Access::owned_by()` 返回「必须过滤的销售 id」（受限）或 `None`（全量），列表查询据此 `.filter(owner_sales_id = ?)`；单条经 `load_scoped_org` 校验归属，越域返回 **404 不泄露存在性**（防销售枚举他人客户 id）。`Access::actor_id()` 供 `customer_notes.author_id` 等审计字段取操作者。
+- 权限点（4 个，`rise_rbac::PERMISSIONS` 代码常量为源，`seed_builtins` 幂等增量落库）：`crm.read`（本人名下）/ `crm.read.all`（无归属边界）/ `crm.write`（写本人名下）/ `crm.assign`（改派，管理员级）。角色映射：sales=read+write，finance=read+read.all，admin=全量。
+
+### 14.3 归属改派事务（`POST …/assign`）
+
+- 事务外：org 存在性（404）+ 目标销售存在性（400，软引用防幽灵 user）+ 幂等判定（已是当前归属 → 200 no-op，不写重复历史）。
+- 事务内：关闭该 org 旧 active 行 → 插入新 active 行 → 更新 `organizations.owner_sales_id`（真相源），原子提交（`TransactionError` 映射回 `AppError` 保留错误码，与 billing 充值事务同范式）。
+
+### 14.4 验证
+
+- `cargo fmt` / `clippy` 干净；`crm` 单测 1（跟进内容 trim + 长度边界，含中文计 char 数）；全 workspace 编译 + 76 单测绿。
+- 迁移 `up` / `down -n 2` / 再 `up` 对称验证（真实 PG）；表结构、FK CASCADE、复合索引、`active` 默认值与设计一致。
+- 19 项端到端 smoke（真实 server + 超管令牌 + 两个 sales JWT）：assign 归属、销售列表仅本人名下、越域客户/跟进 404、跟进 author 归属、空内容 400、归属历史、幂等 assign 不增历史、改派后历史 2 条仅 1 active、改派后可见性翻转、幽灵 sales 400、超管全量。
