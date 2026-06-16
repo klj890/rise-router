@@ -64,7 +64,9 @@ fn validate_content(raw: &str) -> AppResult<String> {
     if content.is_empty() {
         return Err(AppError::BadRequest("content is required".into()));
     }
-    if content.chars().count() > MAX_NOTE_LEN {
+    // 先按字节快速预检：UTF-8 每字符 ≥1 字节，故 bytes > MAX*4 必然超长，
+    // 借短路避免对超大输入（恶意数 MB 文本）做 O(N) 的 chars().count() —— 防 CPU 耗尽。
+    if content.len() > MAX_NOTE_LEN * 4 || content.chars().count() > MAX_NOTE_LEN {
         return Err(AppError::BadRequest(format!(
             "content too long (max {MAX_NOTE_LEN})"
         )));
