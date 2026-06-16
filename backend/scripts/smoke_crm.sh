@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# CRM 片A 端到端 smoke：自起/自停 rise-server + 灌测试数据 + 21 项断言。
+# CRM 片A+B 端到端 smoke：自起/自停 rise-server + 灌测试数据 + 29 项断言。
 #
-# 覆盖：数据域读/写隔离（销售仅本人名下）、越域 404 不泄露存在性、跟进 author 归属、
+# 片A：数据域读/写隔离（销售仅本人名下）、越域 404 不泄露存在性、跟进 author 归属、
 # 空内容 400、归属改派事务、幂等 assign 不增历史、改派后可见性翻转、归属历史 active 唯一、
 # 幽灵 sales 400、超管令牌全量、finance 越权写拦截（crm.read.all 无 crm.write → 403）。
+# 片B：代客开户（事务建 org+user+首条归属、手机号唯一）、代客充值（一步 Paid+入账+业绩归因、
+# 越域 404、finance 无 crm.write 开户 403）。
 #
 # 前置：PostgreSQL 已起且迁移到位（make infra-up && make migrate）。
 # 用法：bash backend/scripts/smoke_crm.sh   （退出码 0=全过，1=有失败/起服务失败）
@@ -214,6 +216,43 @@ expect 403 "20 finance 写跟进（无 crm.write）→ 403"
 # 21) finance（crm.read.all）读任意客户 → 200：读全量不受 base_perm 修复影响
 req GET "/api/crm/customers/$ORG_X" "$(authj "$JWT_C")" ""
 expect 200 "21 finance 读任意客户（read.all 全量）→ 200"
+
+# ---- 片B：代客开户 + 代客充值 ----
+CUST_PHONE="13$(printf '%09d' $(( (TS + RANDOM + 21) % 1000000000 )))"
+
+# 22) 销售A 代客开户 → 200，归属本人 + 建登录账号
+req POST /api/crm/customers "$(authj "$JWT_A")" "{\"phone\":\"$CUST_PHONE\",\"name\":\"SMOKE-代客\",\"org_type\":\"Enterprise\"}"
+ORG_NEW=$(jqv '.org.id')
+{ [ "$CODE" = "200" ] && [ "$(jqv '.owner_sales_id')" = "$UID_A" ] && [ -n "$(jqv '.user_id')" ] && [ "$(jqv '.user_id')" != "null" ]; } && ok "22 销售A 代客开户 → 归属本人+建账号" || ng "22 代客开户"
+
+# 23) 开户客户在销售A 名下可见
+req GET "/api/crm/customers/$ORG_NEW" "$(authj "$JWT_A")" ""
+expect 200 "23 开户客户在销售A 名下可见"
+
+# 24) 开户建首条 active 归属（sales_id=A）
+req GET "/api/crm/customers/$ORG_NEW/assignments" "$(authj "$JWT_A")" ""
+{ [ "$(jqv 'length')" = "1" ] && [ "$(jqv '[.[]|select(.active)][0].sales_id')" = "$UID_A" ]; } && ok "24 开户建首条 active 归属(=A)" || ng "24 首条归属"
+
+# 25) 重复手机号开户 → 400（一号不可两户）
+req POST /api/crm/customers "$(authj "$JWT_A")" "{\"phone\":\"$CUST_PHONE\",\"name\":\"SMOKE-重复\",\"org_type\":\"Enterprise\"}"
+expect 400 "25 重复手机号开户 → 400"
+
+# 26) 销售A 代客充值 100 → 200：Paid + created_by=A + 入账余额=100
+req POST "/api/crm/customers/$ORG_NEW/recharge" "$(authj "$JWT_A")" '{"amount":100}'
+{ [ "$CODE" = "200" ] && [ "$(jqv '.order.status')" = "Paid" ] && [ "$(jqv '.order.created_by_sales_id')" = "$UID_A" ] && [ "$(printf '%s' "$BODY" | jq '.balance|tonumber==100')" = "true" ]; } && ok "26 代客充值 100 → Paid+归因A+入账" || ng "26 代客充值"
+
+# 27) 充值后客户余额=100
+req GET "/api/crm/customers/$ORG_NEW" "$(authj "$JWT_A")" ""
+{ [ "$CODE" = "200" ] && [ "$(printf '%s' "$BODY" | jq '.balance|tonumber==100')" = "true" ]; } && ok "27 充值后客户余额=100" || ng "27 充值后余额"
+
+# 28) 越域充值：销售A 给 orgY（归B）充值 → 404
+req POST "/api/crm/customers/$ORG_Y/recharge" "$(authj "$JWT_A")" '{"amount":50}'
+expect 404 "28 销售A 给 orgY 充值（越域）→ 404"
+
+# 29) finance（无 crm.write）代客开户 → 403
+CUST_PHONE2="13$(printf '%09d' $(( (TS + RANDOM + 31) % 1000000000 )))"
+req POST /api/crm/customers "$(authj "$JWT_C")" "{\"phone\":\"$CUST_PHONE2\",\"name\":\"SMOKE-fin\",\"org_type\":\"Enterprise\"}"
+expect 403 "29 finance 代客开户（无 crm.write）→ 403"
 
 # ============ 汇总 ============
 echo ""
