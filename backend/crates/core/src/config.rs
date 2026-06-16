@@ -69,8 +69,9 @@ impl Config {
                     .map(|s| s.trim().to_string())
                     .filter(|s| !s.is_empty())
                     .collect(),
-                day: env_u32("RR_BILLING_EMAIL_DAY", 1),
-                hour: env_u32("RR_BILLING_EMAIL_HOUR", 9),
+                // 规范化到合法范围：28 号任何月都有 → with_ymd_and_hms 不会返回 None。
+                day: env_u32("RR_BILLING_EMAIL_DAY", 1).clamp(1, 28),
+                hour: env_u32("RR_BILLING_EMAIL_HOUR", 9).min(23),
                 dry_run: env_bool("RR_BILLING_EMAIL_DRY_RUN"),
             },
         }
