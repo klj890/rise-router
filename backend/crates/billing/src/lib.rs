@@ -5,6 +5,7 @@
 //! 「看流水/看余额」端点按密钥 org 隔离（RLS 雏形），走 Bearer 鉴权。
 
 mod charge;
+mod export;
 mod invoice;
 mod margin;
 mod order;
@@ -31,6 +32,7 @@ use serde::{Deserialize, Serialize};
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/margin", get(margin::margin))
+        .route("/margin/export", get(export::export_margin))
         .route("/_ping", get(|| async { "billing ok" }))
         .route("/usage", get(usage))
         .route("/wallet", get(wallet_get))
@@ -42,6 +44,10 @@ pub fn routes() -> Router<AppState> {
             post(reconcile::generate).get(reconcile::list),
         )
         .route("/reconciliations/{id}", get(reconcile::get_one))
+        .route(
+            "/reconciliations/{id}/export",
+            get(export::export_reconciliation),
+        )
         .route("/reconciliations/{id}/lock", post(reconcile::lock))
         .route("/invoices", post(invoice::create).get(invoice::list))
         .route("/invoices/{id}/issue", post(invoice::issue))
