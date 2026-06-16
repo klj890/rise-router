@@ -23,6 +23,10 @@ pub const PERMISSIONS: &[(&str, &str, &str)] = &[
     ("identity.manage", "identity", "组织 / 密钥 管理"),
     ("billing.manage", "billing", "充值 / 订单 / 对账 管理"),
     ("rbac.manage", "rbac", "角色授予 / 权限查看 管理"),
+    ("crm.read", "crm", "客户档案 / 跟进 / 归属 查看（本人名下）"),
+    ("crm.read.all", "crm", "跨销售查看全部客户（无归属边界）"),
+    ("crm.write", "crm", "跟进记录 / 代客操作 写入（本人名下）"),
+    ("crm.assign", "crm", "客户归属销售 变更（管理员级）"),
 ];
 
 /// 内置角色：(slug, name)。
@@ -38,9 +42,16 @@ pub const ROLES: &[(&str, &str)] = &[
 pub fn permissions_for_role(role_slug: &str) -> Vec<&'static str> {
     match role_slug {
         "admin" => PERMISSIONS.iter().map(|(c, _, _)| *c).collect(),
-        "finance" => vec!["billing.manage", "pricing.manage"],
+        // 财务看全量客户业绩（read + read.all），但不代客操作、不改归属
+        "finance" => vec![
+            "billing.manage",
+            "pricing.manage",
+            "crm.read",
+            "crm.read.all",
+        ],
         "ops" => vec!["gateway.manage"],
-        "sales" => vec!["identity.manage"],
+        // 销售：管客户（建组织/密钥）+ 看/写自己名下客户（crm.read/write，无 read.all → 受归属边界约束）
+        "sales" => vec!["identity.manage", "crm.read", "crm.write"],
         _ => vec![],
     }
 }

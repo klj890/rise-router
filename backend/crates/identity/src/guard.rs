@@ -41,3 +41,77 @@ pub async fn require(state: &AppState, headers: &HeaderMap, perm: &str) -> AppRe
         Err(AppError::Forbidden)
     }
 }
+
+/// 数据域访问决议：在「能访问」之上区分「能看多大范围」+「操作者是谁」。
+///
+/// CRM 等带归属边界的域用它做端点层行级隔离（M3；完整 RLS 引擎留 M4）：
+/// 普通销售（仅 base_perm）受归属约束，[`owned_by`](Access::owned_by) 返回本人 id 强制过滤；
+/// 具 all_perm（管理员/财务）或超管令牌则全量，`owned_by` 返回 `None`。
+#[derive(Debug, Clone, Copy)]
+pub struct Access {
+    /// 是否无归属边界（超管令牌 / 具 all_perm 的用户）
+    all: bool,
+    /// 操作者 user_id（超管令牌无用户上下文时 None）
+    user_id: Option<i32>,
+    /// 操作者 org_id（同上）
+    org_id: Option<i32>,
+}
+
+impl Access {
+    /// 是否全量可见（无归属边界）。
+    pub fn is_all(&self) -> bool {
+        self.all
+    }
+
+    /// 受限时返回必须过滤的销售 user_id（`owner_sales_id = ?`）；全量访问返回 `None`（不过滤）。
+    pub fn owned_by(&self) -> Option<i32> {
+        if self.all {
+            None
+        } else {
+            self.user_id
+        }
+    }
+
+    /// 操作者 user_id（用于 author_id / created_by 等审计字段；超管令牌为 `None`）。
+    pub fn actor_id(&self) -> Option<i32> {
+        self.user_id
+    }
+
+    /// 操作者 org_id（超管令牌为 `None`）。
+    pub fn actor_org(&self) -> Option<i32> {
+        self.org_id
+    }
+}
+
+/// 要求至少具备 `base_perm`；若还具备 `all_perm` 则全量访问，否则限本人名下。
+///
+/// 超管令牌 → 全量（无用户上下文）。失败映射同 [`require`]（401/403/503）。
+pub async fn require_scoped(
+    state: &AppState,
+    headers: &HeaderMap,
+    base_perm: &str,
+    all_perm: &str,
+) -> AppResult<Access> {
+    // 通道 1：管理令牌（超管逃生通道）→ 全量，无用户上下文。
+    if rise_core::admin_token_ok(state, headers) {
+        return Ok(Access {
+            all: true,
+            user_id: None,
+            org_id: None,
+        });
+    }
+    // 通道 2：用户 JWT + RBAC 权限点。
+    let claims = crate::session::verify_request(state, headers)?;
+    let db = state.db()?;
+    let perms = rise_rbac::user_permissions(db, claims.sub).await?;
+    let all = rise_rbac::enforce(&perms, all_perm);
+    if all || rise_rbac::enforce(&perms, base_perm) {
+        Ok(Access {
+            all,
+            user_id: Some(claims.sub),
+            org_id: Some(claims.org),
+        })
+    } else {
+        Err(AppError::Forbidden)
+    }
+}
