@@ -363,8 +363,9 @@ sequenceDiagram
 
 ### 14.3 归属改派事务（`POST …/assign`）
 
-- 事务外：org 存在性（404）+ 目标销售存在性（400，软引用防幽灵 user）+ 幂等判定（已是当前归属 → 200 no-op，不写重复历史）。
-- 事务内：关闭该 org 旧 active 行 → 插入新 active 行 → 更新 `organizations.owner_sales_id`（真相源），原子提交（`TransactionError` 映射回 `AppError` 保留错误码，与 billing 充值事务同范式）。
+- 事务外：目标销售存在性（400，软引用防幽灵 user）。
+- 事务内（**`FOR UPDATE` 锁 org 行**串行化对同一客户的并发改派）：org 存在性（404）+ 幂等判定（已是当前归属 → no-op）→ 关闭旧 active 行 → 插入新 active 行 → 更新 `organizations.owner_sales_id`（真相源），原子提交（`TransactionError` 映射回 `AppError` 保留错误码，与 billing 充值事务同范式）。
+- **并发安全（Gemini review 采纳）**：org 读取与幂等判定置于锁内——否则首次并发 assign（org 无 active 行时 `UPDATE … WHERE active=true` 匹配 0 行不互锁）会各插一条 active 行导致双 active 破坏不变量；行锁将并发改派串行化。
 
 ### 14.4 验证
 

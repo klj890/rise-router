@@ -12,8 +12,8 @@ use axum::{
 use rise_core::{AppError, AppResult, AppState};
 use rise_entity::{customer_assignments, organizations, users};
 use sea_orm::{
-    sea_query::Expr, ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, Set,
-    TransactionError, TransactionTrait,
+    sea_query::Expr, ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, QueryOrder,
+    QuerySelect, Set, TransactionError, TransactionTrait,
 };
 use serde::Deserialize;
 
@@ -44,8 +44,9 @@ pub struct AssignReq {
 
 /// `POST /api/crm/customers/{org_id}/assign`（crm.assign，管理员级）—— 改派客户归属。
 ///
-/// 事务外：org 存在性（404）+ 目标销售存在性（400，软引用防幽灵）+ 幂等判定（已是当前归属 → 200 no-op）。
-/// 事务内：关旧 active 行 + 插新 active 行 + 改 owner_sales_id，原子提交。
+/// 事务外：目标销售存在性（400，软引用防幽灵 user）。
+/// 事务内（`FOR UPDATE` 锁 org 行，串行化对同一客户的并发改派）：org 存在性（404）+ 幂等判定
+/// （已是当前归属 → no-op）+ 关旧 active 行 + 插新 active 行 + 改 owner_sales_id，原子提交。
 pub async fn assign(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -55,11 +56,7 @@ pub async fn assign(
     rise_identity::require(&state, &headers, "crm.assign").await?;
     let db = state.db()?;
 
-    let org = organizations::Entity::find_by_id(org_id)
-        .one(db)
-        .await?
-        .ok_or(AppError::NotFound)?;
-    // 校验目标销售存在（软引用，避免 owner_sales_id 指向幽灵 user）
+    // 校验目标销售存在（软引用，避免 owner_sales_id 指向幽灵 user）——事务外，无需持锁。
     if users::Entity::find_by_id(req.sales_id)
         .one(db)
         .await?
@@ -67,24 +64,31 @@ pub async fn assign(
     {
         return Err(AppError::BadRequest("sales_id not found".into()));
     }
-    // 幂等：已是当前归属 → no-op（不写重复历史）
-    if org.owner_sales_id == Some(req.sales_id) {
-        return Ok(Json(org));
-    }
 
     let now = chrono::Utc::now().fixed_offset();
     let sales_id = req.sales_id;
     let updated = db
         .transaction::<_, organizations::Model, AppError>(move |txn| {
             Box::pin(async move {
-                // 1. 关闭该 org 的旧 active 归属行
+                // 1. 行锁（FOR UPDATE）读取 org：串行化对同一客户的并发改派，读到最新归属。
+                //    否则首次并发 assign（无 active 行时彼此不阻塞）会各插一条 active 行 → 双 active 破坏不变量。
+                let org = organizations::Entity::find_by_id(org_id)
+                    .lock_exclusive()
+                    .one(txn)
+                    .await?
+                    .ok_or(AppError::NotFound)?;
+                // 2. 幂等：已是当前归属 → no-op（不写重复历史）。锁内判定，避免竞态绕过。
+                if org.owner_sales_id == Some(sales_id) {
+                    return Ok(org);
+                }
+                // 3. 关闭该 org 的旧 active 归属行
                 customer_assignments::Entity::update_many()
                     .col_expr(customer_assignments::Column::Active, Expr::value(false))
                     .filter(customer_assignments::Column::OrgId.eq(org_id))
                     .filter(customer_assignments::Column::Active.eq(true))
                     .exec(txn)
                     .await?;
-                // 2. 插入新 active 归属行（变更轨迹）
+                // 4. 插入新 active 归属行（变更轨迹）
                 customer_assignments::ActiveModel {
                     org_id: Set(org_id),
                     sales_id: Set(sales_id),
@@ -94,7 +98,7 @@ pub async fn assign(
                 }
                 .insert(txn)
                 .await?;
-                // 3. 更新真相源 organizations.owner_sales_id
+                // 5. 更新真相源 organizations.owner_sales_id（仅 owner 列脏；SeaORM 只 UPDATE 该列）
                 let mut am: organizations::ActiveModel = org.into();
                 am.owner_sales_id = Set(Some(sales_id));
                 let m = am.update(txn).await?;
