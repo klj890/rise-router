@@ -18,7 +18,7 @@ mod wallet;
 pub use charge::{compute_charge, extract_token_usage};
 pub use email_cron::spawn as spawn_email_cron;
 pub use settle::{settle_chat, ChatSettlement};
-pub use wallet::{ensure_funds, wallet_available};
+pub use wallet::{ensure_funds, recharge as recharge_wallet, wallet_available};
 
 use axum::{
     extract::{Query, State},
