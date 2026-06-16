@@ -5,6 +5,8 @@
 
 pub mod api_keys;
 pub mod channels;
+pub mod customer_assignments;
+pub mod customer_notes;
 pub mod discounts;
 pub mod groups;
 pub mod invoices;

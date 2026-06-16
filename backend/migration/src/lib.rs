@@ -25,6 +25,8 @@ mod m20260613_000020_create_user_roles;
 mod m20260613_000021_add_phone_code_attempts;
 mod m20260613_000022_create_invoices;
 mod m20260613_000023_create_cron_state;
+mod m20260613_000024_create_customer_notes;
+mod m20260613_000025_create_customer_assignments;
 
 pub struct Migrator;
 
@@ -55,6 +57,8 @@ impl MigratorTrait for Migrator {
             Box::new(m20260613_000021_add_phone_code_attempts::Migration),
             Box::new(m20260613_000022_create_invoices::Migration),
             Box::new(m20260613_000023_create_cron_state::Migration),
+            Box::new(m20260613_000024_create_customer_notes::Migration),
+            Box::new(m20260613_000025_create_customer_assignments::Migration),
         ]
     }
 }
