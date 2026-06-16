@@ -301,7 +301,7 @@ sequenceDiagram
 - **计费正确性（code-review 延后项）**：`prices.next_version` 读-改-写竞态，建议加 `(model,group,billing_unit,version)` 唯一约束（#6，低概率、需表达式索引处理 NULL group）。〔#4 分档单价被折扣污染已修：unit_prices 收紧为扁平数值映射，分档定价待专门结构。〕
 - **管理台增强**：非 org 维度可清空字段（api_key 预算/白名单、channel adapter_config、route priority/weight）的后端 null 清空仅 org 走 double_option；字段级 i18n（表单标签中文直出）。〔#7 前端 FK 选项 memo 陈旧已修。〕
 - **登录/短信**：真实短信网关替换 mock（`deliver_sms`）并移除 `dev_code` 响应字段（配置开关）；微信等第三方登录走 `user_identities` 旁表；实名认证。
-- **财务报表导出/账单（片F 已落）**：xlsx 导出对账单 / 毛利（Part1）+ 月度毛利月报邮件 cron（Part2，lettre + `cron_state` 防重 + dry-run）。SMTP/收件人/开关走环境变量（`RR_SMTP_*` / `RR_BILLING_EMAIL_*`），不建通用 settings 基建。**仍待做**：① per-org 客户账单邮件——org 无邮箱字段，需 M3 CRM 给 org 加邮箱 + 通知子系统；② 客户流水（usage）明细导出（全量 vs 分页量级设计）；③ identity `jwt_secret` 未配时 `require` 返回 500 应为 503（既有小瑕疵，影响所有管理端点，非本片引入）。
+- **财务报表导出/账单（片F 已落）**：xlsx 导出对账单 / 毛利（Part1）+ 月度毛利月报邮件 cron（Part2，lettre + `cron_state` 防重 + dry-run）。SMTP/收件人/开关走环境变量（`RR_SMTP_*` / `RR_BILLING_EMAIL_*`），不建通用 settings 基建。**仍待做**：① per-org 客户账单邮件——org 无邮箱字段，需 M3 CRM 给 org 加邮箱 + 通知子系统；② 客户流水（usage）明细导出（全量 vs 分页量级设计）。〔③ identity `jwt_secret` 未配时返回 500 应为 503 已修：缺失走 `AppError::Unavailable`（503），与 guard/verify_request 文档一致。〕
 - **多模态**：`/v1/tasks` 异步任务子系统（状态机 + 轮询/webhook + artifacts/S3）；渠道成本 → `cost_amount` 毛利。
 - relay：流式 usage 块对不设 include_usage 客户端的剥离（当前透传）；协议族适配器（anthropic/gemini/任务式）。
 
