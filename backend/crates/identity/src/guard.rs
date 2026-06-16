@@ -104,14 +104,16 @@ pub async fn require_scoped(
     let claims = crate::session::verify_request(state, headers)?;
     let db = state.db()?;
     let perms = rise_rbac::user_permissions(db, claims.sub).await?;
-    let all = rise_rbac::enforce(&perms, all_perm);
-    if all || rise_rbac::enforce(&perms, base_perm) {
-        Ok(Access {
-            all,
-            user_id: Some(claims.sub),
-            org_id: Some(claims.org),
-        })
-    } else {
-        Err(AppError::Forbidden)
+    // 必须具备 base_perm 才放行（与本函数契约一致）；all_perm 仅决定数据域范围（全量/本人名下）。
+    // 切勿写成 `all || base`：否则具 all_perm 但无 base_perm 者会越权——例如 finance 持
+    // crm.read.all 却无 crm.write，会绕过写端点的 base=crm.write 校验写入跟进记录（权限提升）。
+    if !rise_rbac::enforce(&perms, base_perm) {
+        return Err(AppError::Forbidden);
     }
+    let all = rise_rbac::enforce(&perms, all_perm);
+    Ok(Access {
+        all,
+        user_id: Some(claims.sub),
+        org_id: Some(claims.org),
+    })
 }
