@@ -96,11 +96,9 @@ fn deliver_sms(phone: &str, code: &str) {
 }
 
 fn jwt_secret(state: &AppState) -> AppResult<String> {
-    state
-        .config
-        .jwt_secret
-        .clone()
-        .ok_or_else(|| AppError::Internal("auth not configured (set RR_JWT_SECRET)".into()))
+    // 未配 RR_JWT_SECRET 属部署配置缺失（非运行时故障）→ 503 服务不可用，而非 500。
+    // 与 guard::require / verify_request 文档承诺一致（响应不回显配置细节）。
+    state.config.jwt_secret.clone().ok_or(AppError::Unavailable)
 }
 
 #[derive(Deserialize)]
