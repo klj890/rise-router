@@ -2381,7 +2381,14 @@ name = "rise-crm"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "chrono",
  "rise-core",
+ "rise-entity",
+ "rise-identity",
+ "rust_decimal",
+ "sea-orm",
+ "serde",
+ "tracing",
 ]
 
 [[package]]
