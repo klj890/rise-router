@@ -71,15 +71,16 @@ static SOURCES: &[Source] = &[
                 key: "avg_latency",
                 agg: "avg(latency_ms)",
             },
-            // P95 延迟（有序集聚合，合法 PG；NULL latency 自动忽略）——运维数据集用
+            // P95 延迟（有序集聚合）——latency_ms 是 integer，显式 ::float8 转换避免
+            // percentile_cont 在部分 PG 版本因排序列类型不匹配报错；参数 0.95::float8 同理。
             Met {
                 key: "p95_latency",
-                agg: "percentile_cont(0.95) within group (order by latency_ms)",
+                agg: "percentile_cont(0.95::float8) within group (order by latency_ms::float8)",
             },
-            // 流式调用占比 0..1——运维数据集用
+            // 流式调用占比 0..1——运维数据集用（is_stream::int 比 case when 更惯用）
             Met {
                 key: "stream_ratio",
-                agg: "avg(case when is_stream then 1 else 0 end)",
+                agg: "avg(is_stream::int)",
             },
         ],
     },
@@ -89,9 +90,10 @@ static SOURCES: &[Source] = &[
         relation: "orders",
         time_column: Some("created_at"),
         dims: &[
+            // 状态码映射可读文本（策展语义层：前端/财务看 Paid 而非 "2"）
             Dim {
                 key: "status",
-                expr: "status",
+                expr: "CASE status WHEN 1 THEN 'Pending' WHEN 2 THEN 'Paid' WHEN 3 THEN 'Failed' WHEN 4 THEN 'Refunded' ELSE 'Unknown' END",
             },
             Dim {
                 key: "pay_channel",

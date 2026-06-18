@@ -212,10 +212,10 @@ if [ "$CODE" = "200" ] && printf '%s' "$BODY" | jq -e '.rls_filtered==true and .
 req POST /api/report/datasets/sales_perf/query "$(authj "$JWT_CUST")" "{\"metrics\":[\"paid_amount\"],$WIN}"
 expect 403 "19 customer 查 sales_perf（无权限点）→ 403"
 
-# 20) channel_health ops 全量：calls=3（窗内全部 usage）
+# 20) channel_health ops 全量：calls=3, p95=290(percentile_cont over 100/200/300), stream_ratio=0
 req POST /api/report/datasets/channel_health/query "$(authj "$JWT_OPS")" "{\"metrics\":[\"calls\",\"p95_latency\",\"stream_ratio\"],$WIN}"
-if [ "$CODE" = "200" ] && printf '%s' "$BODY" | jq -e '.rls_filtered==false and .rows[0].calls==3' >/dev/null; then
-  ok "20 channel_health ops 全量 calls=3 + p95/stream 指标可算"; else ng "20 channel_health ops"; fi
+if [ "$CODE" = "200" ] && printf '%s' "$BODY" | jq -e '.rls_filtered==false and .rows[0].calls==3 and .rows[0].p95_latency==290 and .rows[0].stream_ratio==0' >/dev/null; then
+  ok "20 channel_health ops 全量 calls=3 p95=290 stream_ratio=0"; else ng "20 channel_health ops"; fi
 
 # 21) channel_health customer 无 report.dataset.ops → 403
 req POST /api/report/datasets/channel_health/query "$(authj "$JWT_CUST")" "{\"metrics\":[\"calls\"],$WIN}"
