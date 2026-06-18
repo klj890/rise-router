@@ -2473,7 +2473,15 @@ name = "rise-report"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "chrono",
  "rise-core",
+ "rise-entity",
+ "rise-identity",
+ "rise-rbac",
+ "sea-orm",
+ "serde",
+ "serde_json",
+ "tracing",
 ]
 
 [[package]]

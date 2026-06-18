@@ -27,6 +27,20 @@ pub const PERMISSIONS: &[(&str, &str, &str)] = &[
     ("crm.read.all", "crm", "跨销售查看全部客户（无归属边界）"),
     ("crm.write", "crm", "跟进记录 / 代客操作 写入（本人名下）"),
     ("crm.assign", "crm", "客户归属销售 变更（管理员级）"),
+    ("report.read", "report", "查看报表 / 查询数据集（行级隔离）"),
+    ("report.define", "report", "创建 / 编辑定制报表"),
+    (
+        "report.dataset.finance",
+        "report",
+        "访问财务数据集（营收 / 对账 / 毛利）",
+    ),
+    ("report.dataset.crm", "report", "访问 CRM / 销售业绩数据集"),
+    (
+        "report.dataset.ops",
+        "report",
+        "访问运维数据集（渠道健康 / 延迟）",
+    ),
+    ("report.export", "report", "导出 / 订阅报表"),
 ];
 
 /// 内置角色：(slug, name)。
@@ -42,18 +56,64 @@ pub const ROLES: &[(&str, &str)] = &[
 pub fn permissions_for_role(role_slug: &str) -> Vec<&'static str> {
     match role_slug {
         "admin" => PERMISSIONS.iter().map(|(c, _, _)| *c).collect(),
-        // 财务看全量客户业绩（read + read.all），但不代客操作、不改归属
+        // 财务看全量客户业绩（read + read.all），但不代客操作、不改归属；报表全量财务/CRM 数据集
         "finance" => vec![
             "billing.manage",
             "pricing.manage",
             "crm.read",
             "crm.read.all",
+            "report.read",
+            "report.define",
+            "report.dataset.finance",
+            "report.dataset.crm",
+            "report.export",
         ],
-        "ops" => vec!["gateway.manage"],
-        // 销售：管客户（建组织/密钥）+ 看/写自己名下客户（crm.read/write，无 read.all → 受归属边界约束）
-        "sales" => vec!["identity.manage", "crm.read", "crm.write"],
+        "ops" => vec![
+            "gateway.manage",
+            "report.read",
+            "report.dataset.ops",
+            "report.export",
+        ],
+        // 销售：管客户（建组织/密钥）+ 看/写自己名下客户（crm.read/write，无 read.all → 受归属边界约束）；
+        // 报表仅 CRM/业绩数据集，且经 rls_rule 限本人名下
+        "sales" => vec![
+            "identity.manage",
+            "crm.read",
+            "crm.write",
+            "report.read",
+            "report.define",
+            "report.dataset.crm",
+            "report.export",
+        ],
+        // 客户：仅能看自己组织的用量/账单报表（经 rls_rule 限 org_id）
+        "customer" => vec!["report.read", "report.export"],
         _ => vec![],
     }
+}
+
+/// 角色优先级（数字越大越高）。用于多角色用户解析"有效角色"以选 RLS 分支。
+pub fn role_rank(slug: &str) -> u8 {
+    match slug {
+        "admin" => 5,
+        "finance" => 4,
+        "ops" => 3,
+        "sales" => 2,
+        "customer" => 1,
+        _ => 0,
+    }
+}
+
+/// 解析用户的有效角色（多角色取优先级最高者）。无任何角色返回 `None`。
+/// 报表 RLS 引擎用它选 `rls_rule` 的角色分支。
+pub async fn effective_role(
+    db: &DatabaseConnection,
+    user_id: i32,
+) -> Result<Option<String>, DbErr> {
+    Ok(list_user_roles(db, user_id)
+        .await?
+        .into_iter()
+        .max_by_key(|r| role_rank(&r.slug))
+        .map(|r| r.slug))
 }
 
 /// 纯判定：主体权限集是否含所需权限码。
@@ -247,13 +307,25 @@ mod tests {
     fn admin_gets_all_perms_others_subset() {
         let all: Vec<&str> = PERMISSIONS.iter().map(|(c, _, _)| *c).collect();
         assert_eq!(permissions_for_role("admin").len(), all.len());
-        assert_eq!(permissions_for_role("ops"), vec!["gateway.manage"]);
-        assert!(permissions_for_role("customer").is_empty());
+        // ops 保留网关管理，并获运维报表数据集（report.dataset.ops）
+        assert!(permissions_for_role("ops").contains(&"gateway.manage"));
+        assert!(permissions_for_role("ops").contains(&"report.dataset.ops"));
+        // customer 现可看自己组织的报表（report.read），不再为空
+        assert!(permissions_for_role("customer").contains(&"report.read"));
+        assert!(permissions_for_role("unknown").is_empty());
         // 每个非 admin 角色的权限都是合法权限码
-        for slug in ["finance", "ops", "sales"] {
+        for slug in ["finance", "ops", "sales", "customer"] {
             for c in permissions_for_role(slug) {
                 assert!(all.contains(&c), "{c} not in catalog");
             }
         }
+    }
+
+    #[test]
+    fn role_rank_orders_by_privilege() {
+        assert!(role_rank("admin") > role_rank("finance"));
+        assert!(role_rank("finance") > role_rank("sales"));
+        assert!(role_rank("sales") > role_rank("customer"));
+        assert_eq!(role_rank("unknown"), 0);
     }
 }
