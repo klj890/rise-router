@@ -7,6 +7,8 @@
 //!
 //! 守卫放在 identity 域（这里有 JWT 校验），调用 rbac 域的权限解析；依赖方向 identity→rbac，无环。
 
+use std::collections::HashSet;
+
 use axum::http::HeaderMap;
 use rise_core::{AppError, AppResult, AppState};
 
@@ -115,5 +117,53 @@ pub async fn require_scoped(
         all,
         user_id: Some(claims.sub),
         org_id: Some(claims.org),
+    })
+}
+
+/// 报表等需要「当前用户角色 + 身份参数 + 权限集」做行级隔离（RLS）的域使用的主体。
+///
+/// 与 [`Access`] 的二元（全量/本人）不同：RLS 需按**角色**选不同过滤列（customer→org_id /
+/// sales→owner_sales_id …），故携带有效角色。superadmin 令牌 → 角色 `admin`、持全部权限、无身份参数。
+#[derive(Debug, Clone)]
+pub struct Principal {
+    /// 有效角色 slug（多角色取优先级最高；超管令牌为 "admin"）
+    pub role: String,
+    /// 操作者 user_id（超管令牌为 None）
+    pub user_id: Option<i32>,
+    /// 操作者 org_id（超管令牌为 None）
+    pub org_id: Option<i32>,
+    /// 主体权限码集（超管令牌为全部权限点）
+    pub perms: HashSet<String>,
+}
+
+/// 解析当前请求主体（角色 + 身份参数 + 权限集）。
+///
+/// 通道 1：管理令牌 → admin / 全权限 / 无身份参数。
+/// 通道 2：用户 JWT → 有效角色（[`rise_rbac::effective_role`]）+ 权限集 + claims 的 user/org。
+/// 失败映射同 [`require`]（401/403/503）。无角色的登录用户默认按 `customer` 处理。
+pub async fn resolve_principal(state: &AppState, headers: &HeaderMap) -> AppResult<Principal> {
+    if rise_core::admin_token_ok(state, headers) {
+        let perms = rise_rbac::PERMISSIONS
+            .iter()
+            .map(|(c, _, _)| (*c).to_owned())
+            .collect();
+        return Ok(Principal {
+            role: "admin".to_owned(),
+            user_id: None,
+            org_id: None,
+            perms,
+        });
+    }
+    let claims = crate::session::verify_request(state, headers)?;
+    let db = state.db()?;
+    let perms = rise_rbac::user_permissions(db, claims.sub).await?;
+    let role = rise_rbac::effective_role(db, claims.sub)
+        .await?
+        .unwrap_or_else(|| "customer".to_owned());
+    Ok(Principal {
+        role,
+        user_id: Some(claims.sub),
+        org_id: Some(claims.org),
+        perms,
     })
 }

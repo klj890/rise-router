@@ -27,6 +27,8 @@ mod m20260613_000022_create_invoices;
 mod m20260613_000023_create_cron_state;
 mod m20260613_000024_create_customer_notes;
 mod m20260613_000025_create_customer_assignments;
+mod m20260613_000026_create_datasets;
+mod m20260613_000027_create_report_definitions;
 
 pub struct Migrator;
 
@@ -59,6 +61,8 @@ impl MigratorTrait for Migrator {
             Box::new(m20260613_000023_create_cron_state::Migration),
             Box::new(m20260613_000024_create_customer_notes::Migration),
             Box::new(m20260613_000025_create_customer_assignments::Migration),
+            Box::new(m20260613_000026_create_datasets::Migration),
+            Box::new(m20260613_000027_create_report_definitions::Migration),
         ]
     }
 }

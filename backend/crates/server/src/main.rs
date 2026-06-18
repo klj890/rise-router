@@ -22,6 +22,10 @@ async fn main() -> anyhow::Result<()> {
             if let Err(e) = rise_rbac::seed_builtins(&conn).await {
                 tracing::warn!(error = %e, "rbac seed_builtins failed; RBAC may be incomplete");
             }
+            // 幂等落地内置报表数据集（依赖 RBAC 权限点已 seed）。失败仅告警不阻断。
+            if let Err(e) = rise_report::seed_datasets(&conn).await {
+                tracing::warn!(error = %e, "report seed_datasets failed; datasets may be incomplete");
+            }
             Some(conn)
         }
         Err(e) => {

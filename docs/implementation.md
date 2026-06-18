@@ -1,6 +1,8 @@
 # Rise Router 已实现功能与数据库设计（as-built）
 
-> 版本：v0.7 · 2026-06-16 · 本文记录**已落地的真实实现状态**（与设计蓝图 [data-model.md](./data-model.md)/[architecture.md](./architecture.md) 区分）。表结构取自运行库真实 schema。
+> 版本：v0.8 · 2026-06-18 · 本文记录**已落地的真实实现状态**（与设计蓝图 [data-model.md](./data-model.md)/[architecture.md](./architecture.md) 区分）。表结构取自运行库真实 schema。
+>
+> v0.8 增量（分支 `feat/m4-report-slice-a`）：⑨ **M4 监控报表 片A 内核** —— 策展语义层「**不开放原始库**」落地：新增 `datasets`（source 白名单 + 策展 metrics/dimensions + 按角色 `rls_rule`）/ `report_definitions`（只能基于数据集）两表；**RLS 行级隔离查询引擎**（`report/src/engine.rs`）复用 RBAC 与新增 `rise_identity::Principal`（有效角色 + org/user + 权限集），安全三步：权限门禁 → 按角色取 `rls_rule` 分支（缺键=403 / null=全量 / {column,param}=绑定参数过滤）→ 仅拼装 source 白名单受控标识符 + 值一律绑定参数注入（无注入面）。新增 RBAC 权限点 `report.read`/`report.define`/`report.dataset.{finance,crm,ops}`/`report.export` + `effective_role`。内置「用量」数据集打通端到端（customer 仅见本组织 / finance·admin 全量 / sales 无分支 403）。狗粮：报表为内部一等 App，与第三方走同一数据集契约。15 项 smoke 全过（`scripts/smoke_report.sh`）。详见 §15。
 >
 > v0.7 增量（分支 `feat/m3-crm-slice-b`）：⑧ **M3 CRM 片B** —— 销售**代客开户**（事务建 org+user+首条 active 归属，客户后续手机号+短信登录）+ **代客充值**（一步直接 Paid 订单 + 入账，`orders.created_by_sales_id` 业绩归因）；复用片A `require_scoped` 数据域（销售仅给自己名下客户开户/充值）+ `billing::recharge_wallet`（同事务入账）；**零新表**（复用 orders/users/customer_assignments）。详见 §14.5。
 >
@@ -27,7 +29,8 @@
 | **前端管理控制台** | 数据驱动 `CrudPage` + 字段描述符（8 实体）+ 价格预览页 + 管理令牌设置；`X-Admin-Token` 通道 | `frontend/shell/src/pages/admin/` | ✅ 本片 |
 | **用户登录** | 手机号 + 短信验证码注册/登录（mock 网关 + 60s 限流 + 5 次错码作废）→ JWT 会话；首登自动建 org-of-one；前端登录页接通 | `backend/crates/identity/src/session.rs`、`frontend/shell/src/pages/Login.tsx` | ✅ 本片 |
 | **RBAC** | roles/permissions/role_permissions/user_roles + `enforce` + 内置 seed + 引导首 admin；管理端点 `require(perm)`（superadmin 令牌逃生通道 + 用户角色）+ 角色授予 API | `backend/crates/rbac`、`backend/crates/identity/src/{guard,role_admin}.rs` | ✅ main |
-| **M3 CRM 片A** | 客户档案（org + 钱包余额 + 归属销售）+ 跟进记录 + 归属变更历史（事务改派 / 业绩归因轨迹）；新增 `require_scoped`→`Access` **端点层数据域隔离**（销售仅见自己名下） | `backend/crates/crm`、`backend/crates/identity/src/guard.rs`、`migration` | ✅ 本片 |
+| **M3 CRM 片A** | 客户档案（org + 钱包余额 + 归属销售）+ 跟进记录 + 归属变更历史（事务改派 / 业绩归因轨迹）；新增 `require_scoped`→`Access` **端点层数据域隔离**（销售仅见自己名下） | `backend/crates/crm`、`backend/crates/identity/src/guard.rs`、`migration` | ✅ main |
+| **M4 报表 片A** | 策展数据集 + **RLS 行级隔离查询引擎**（source 白名单 + 按角色 `rls_rule` 绑定参数注入）+ `Principal` + report.* 权限点 + report_definitions CRUD；内置「用量」数据集端到端 | `backend/crates/report`、`backend/crates/identity/src/guard.rs`、`migration` | ✅ 本片 |
 
 **MVP 端到端可计费回路已闭合且可视化运营**：建组织→建分组→配渠道/模型/路由→配价/折扣→发密钥（明文一次）→价格预览→调用（relay）→扣费→看流水——全程管理台操作，不需手写 SQL。用户经手机号+短信登录，管理端点按 RBAC 角色权限鉴权。
 
@@ -383,3 +386,40 @@ sequenceDiagram
 - **代客开户 `POST /api/crm/customers`（crm.write）**：`require_scoped(crm.write, crm.read.all)` 决议归属——受限销售强制归己（`owned_by`），全量权限（管理员/超管）须显式指定 `owner_sales_id`（校验存在）。事务建 org + user（无密码，客户后续手机号+短信登录）+ 首条 active assignment，三者原子（避免孤儿组织/无归属/无账号）。手机号格式 + 唯一校验（已注册 400，DB 唯一约束兜底）。
 - **代客充值 `POST /api/crm/customers/{org_id}/recharge`（crm.write）**：`load_scoped_org` 数据域校验（销售仅给自己名下，越域 404）。一步直接 Paid：事务内建 Paid 订单（`created_by_sales_id`=操作者，供片C 业绩归因）+ `recharge_wallet`（同事务 savepoint 入账），原子——绝不建单不入账。金额 round_dp(8) + 正数 + 上限校验。
 - **验证**：smoke 断言 22–29 覆盖上述路径 + 越权（finance 无 crm.write）；fmt + clippy + 76 单测 + smoke 29/29 全绿。
+
+## 15. M4 监控报表 片A：策展数据集 + RLS 行级隔离查询引擎（v0.8 本片）
+
+> 分支 `feat/m4-report-slice-a`。第一性原则——「查询数据库」绝不落成开放 DB 访问：管理员定义**数据集**=策展视图 + 声明可用指标/维度 + 按角色行级规则；报表只能基于数据集，碰不到原始表；查询引擎按当前用户角色**强制注入** RLS，用户无法绕过。报表自身是内部一等 App（狗粮：与第三方走同一数据集契约）。
+
+### 15.1 新增表
+
+- **`datasets`**：`slug`(唯一) / `name` / `source`(代码白名单注册键) / `metrics`(jsonb `[{key,label}]`) / `dimensions`(jsonb) / `rls_rule`(jsonb `{role: {column,param}|null}`) / `required_permission` / `created_at`。无 FK（source 由代码校验）。
+- **`report_definitions`**：`dataset_id`(FK CASCADE) / `name` / `owner_user_id`(软引用) / `visibility`(private/role/org) / `config`(jsonb) / `created_at`。报表只能基于数据集。
+
+### 15.2 策展 source 白名单（安全边界）
+
+- 代码侧 `report/src/source.rs` 注册 source：物理关系名 + 可选时间列 + **可作维度的列**（含 `date_trunc` 时间分桶）+ **可聚合指标及其 SQL 聚合表达式**。`datasets.source` 只能引用已注册 source，其 metrics/dimensions 只能是白名单子集——管理员可零代码策展子集/改标签，但碰不到白名单外的列；新数据源 = 加 source 注册（+ 必要时建策展视图迁移），属代码改动。
+- 片A 注册 `usage` source（`usage_logs`，时间列 `created_at`；维度 model_id/channel_id/day；指标 calls/revenue/avg_latency）。
+
+### 15.3 RLS 查询引擎（`report/src/engine.rs`）
+
+复用 RBAC + 新增 `rise_identity::Principal`（`resolve_principal`：有效角色 + org_id/user_id + 权限集；超管令牌 → admin/全权限/无身份参数；多角色取 `rise_rbac::effective_role` 优先级最高者）。安全三步：
+
+1. **权限门禁**：principal 须持 `dataset.required_permission`，否则 403。
+2. **取 RLS 分支**：`dataset.rls_rule[role]`——缺键 → 403（该角色禁访）；`null` → 全量（finance/admin/ops）；`{column,param}` → 按列过滤（param `current_org`→org_id / `current_user`·`current_sales`→user_id）。
+3. **拼装**：维度/指标只取自 source 白名单（受控标识符，校验合法标识符）；过滤值一律绑定参数（`$1..`，`Statement::from_sql_and_values`）注入，**无字符串拼接用户输入** → 无注入面。维度 `::text`、指标 `::float8` 输出统一读取为 JSON。
+
+### 15.4 RBAC 扩展 + API
+
+- 新增权限点 `report.read` / `report.define` / `report.dataset.{finance,crm,ops}` / `report.export`，分配 finance/ops/sales/customer（admin 全量）；新增 `role_rank` + `effective_role`。
+- 端点（`/api/report`）：`GET /datasets`（按权限过滤可见）、`GET /datasets/{slug}`、`POST /datasets/{slug}/query`（核心，RLS 强制注入）、`GET|POST /reports`、`GET|DELETE /reports/{id}`。启动 `seed_datasets` 幂等落内置数据集（紧随 RBAC seed）。
+
+### 15.5 验证
+
+- `cargo fmt --check` / `clippy -D warnings` 全 workspace 干净；rbac 单测更新（ops/customer 权限随报表点扩展）+ 新增 `role_rank` 单测；全 workspace 编译 + 测试绿。
+- 迁移 `up` 真实 PG 应用通过（datasets/report_definitions 建表）。
+- **15 项端到端 smoke 固化为 `backend/scripts/smoke_report.sh`**（自起/自停 server + psql 灌 usage_logs，2099 年时间戳 + 时间窗隔离测试行）：数据集列表/详情、admin 全量聚合(calls=3/revenue=129, rls_filtered=false)、**customer RLS 仅本组织(calls=2/revenue=30, rls_filtered=true)**、customer 维度查询仅本组织、未知指标/空指标/非白名单维度 400、sales 无 rls 分支 403、customer 无 report.define 403、报表 CRUD、基于不存在数据集 400。实测 15/15 绿。
+
+### 15.6 片A 边界 / 后续
+
+- 片A 仅落「用量」数据集打通内核；**片B** 增业绩/账单/运维数据集（零引擎改动，仅加 source 注册 + seed），其中销售业绩需 `owner_sales_id` JOIN（用量按归属）。**片C** 前端报表构建器（依赖已冻结的 query API 契约）。**片D** 导出(xlsx/PDF)+订阅(邮件/webhook，复用 M2 cron)。**片E** 运维埋点补缺（`usage_logs.cost_amount` 毛利成本、错误率字段、任务队列）。

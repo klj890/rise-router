@@ -11,7 +11,7 @@ mod role_admin;
 mod session;
 
 pub use auth::{evaluate_key, hash_key, KeyContext, KeyError};
-pub use guard::{require, require_scoped, Access, Subject};
+pub use guard::{require, require_scoped, resolve_principal, Access, Principal, Subject};
 pub use session::valid_phone;
 
 use axum::{
