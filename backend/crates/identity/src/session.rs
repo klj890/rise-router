@@ -67,7 +67,7 @@ impl From<users::Model> for UserView {
 }
 
 /// 中国大陆手机号粗校验：11 位、首位 1、次位 3-9、全数字。
-fn valid_phone(p: &str) -> bool {
+pub fn valid_phone(p: &str) -> bool {
     let b = p.as_bytes();
     p.len() == 11
         && b[0] == b'1'

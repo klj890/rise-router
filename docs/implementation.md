@@ -1,6 +1,8 @@
 # Rise Router 已实现功能与数据库设计（as-built）
 
-> 版本：v0.6 · 2026-06-16 · 本文记录**已落地的真实实现状态**（与设计蓝图 [data-model.md](./data-model.md)/[architecture.md](./architecture.md) 区分）。表结构取自运行库真实 schema。
+> 版本：v0.7 · 2026-06-16 · 本文记录**已落地的真实实现状态**（与设计蓝图 [data-model.md](./data-model.md)/[architecture.md](./architecture.md) 区分）。表结构取自运行库真实 schema。
+>
+> v0.7 增量（分支 `feat/m3-crm-slice-b`）：⑧ **M3 CRM 片B** —— 销售**代客开户**（事务建 org+user+首条 active 归属，客户后续手机号+短信登录）+ **代客充值**（一步直接 Paid 订单 + 入账，`orders.created_by_sales_id` 业绩归因）；复用片A `require_scoped` 数据域（销售仅给自己名下客户开户/充值）+ `billing::recharge_wallet`（同事务入账）；**零新表**（复用 orders/users/customer_assignments）。详见 §14.5。
 >
 > v0.6 增量（分支 `feat/m3-crm-foundation`）：⑧ **M3 CRM 片A** —— 客户档案（org + 钱包余额 + 归属销售）、跟进记录（`customer_notes`）、归属变更历史（`customer_assignments`：事务改派 + 业绩归因轨迹）。新增 RBAC 权限点 `crm.read`/`crm.read.all`/`crm.write`/`crm.assign` + **端点层数据域隔离**（销售仅见/操作自己名下客户，管理员/财务/超管令牌全量）。详见 §14。
 >
@@ -290,7 +292,7 @@ sequenceDiagram
 | `/api/identity/organizations` | 组织 | group_id/owner_sales_id 三态部分更新；删除查 key/钱包/订单引用 |
 | `/api/identity/api-keys` | 虚拟密钥 | 生成 `sk-rr-…` 明文**仅回显一次**，库存 sha256；`ApiKeyView` 脱敏 |
 
-**CRM（M3 片A，`require_scoped` 数据域隔离：销售仅本人名下，管理员/财务/超管令牌全量）**
+**CRM（M3 片A+B，`require_scoped` 数据域隔离：销售仅本人名下，管理员/财务/超管令牌全量）**
 
 | 方法 | 路径 | 权限点 | 说明 |
 |---|---|---|---|
@@ -299,18 +301,20 @@ sequenceDiagram
 | GET/POST | `/api/crm/customers/{org_id}/notes` | crm.read[.all] / crm.write | 跟进记录列表（倒序游标）/ 新增（author_id 取操作者）|
 | GET | `/api/crm/customers/{org_id}/assignments` | crm.read[.all] | 归属变更历史，id 倒序 |
 | POST | `/api/crm/customers/{org_id}/assign` | crm.assign | 改派归属（事务：关旧 active 行 + 插新行 + 改 owner_sales_id；幂等 no-op；幽灵 sales 400）|
+| POST | `/api/crm/customers` | crm.write | **代客开户**（片B）：事务建 org+user+首条 active 归属（销售→归己；全量权限指定 owner_sales_id）；手机号唯一 |
+| POST | `/api/crm/customers/{org_id}/recharge` | crm.write | **代客充值**（片B）：数据域校验后一步建 Paid 订单（created_by_sales_id=操作者）+ 入账；越域 404 |
 
 ## 10. 工程清单
 
-- **crate**：`rise-core`（+ 共享 `admin_guard`/`admin_token_ok`）、`rise-entity`（**21 表**共享实体）、`rise-identity`（密钥鉴权 + 用户登录/JWT + `require`/`require_scoped` 守卫 + 角色授予）、`rise-gateway`、`rise-pricing`、`rise-billing`、`rise-rbac`（enforce + seed + 权限解析）、`rise-crm`（客户档案 + 跟进 + 归属，数据域隔离）；`task/report/support` 占位；`rise-server`、`migration`。
+- **crate**：`rise-core`（+ 共享 `admin_guard`/`admin_token_ok`）、`rise-entity`（**21 表**共享实体）、`rise-identity`（密钥鉴权 + 用户登录/JWT + `require`/`require_scoped` 守卫 + 角色授予）、`rise-gateway`、`rise-pricing`、`rise-billing`、`rise-rbac`（enforce + seed + 权限解析）、`rise-crm`（客户档案 + 跟进 + 归属 + 代客开户/充值，数据域隔离；片B 依赖 `rise-billing::recharge_wallet`）；`task/report/support` 占位；`rise-server`、`migration`。
 - **迁移（25）**：`000001`…`000010`（M1 定价/网关/身份/计费）+ `000011 wallets`…`000014 reconciliations`（M2 财务）+ `000015 users` / `000016 phone_codes` / `000017 roles` / `000018 permissions` / `000019 role_permissions` / `000020 user_roles` / `000021 add_phone_code_attempts` / `000022 invoices` / `000023 cron_state`（后台任务防重 KV）+ `000024 customer_notes` / `000025 customer_assignments`（M3 CRM）。
-- **测试**：后端 **76 单测**（pricing 16、gateway 18、identity 14、billing 24、rbac 2、crm 1、core 1）。billing 含 charge 10 + margin 7（含超大年份回归）+ export 3（xlsx zip-magic smoke）+ email_cron 4（prev_period / sent_this_month 防重 / build_html / should_send 自愈）。M3 片A 另经 21 项端到端 smoke（已脚本化 `backend/scripts/smoke_crm.sh`，自起自停 server，实测 21/21；数据域读/写隔离、改派事务/幂等/历史、404 不泄露、幽灵 sales 校验、finance 越权写拦截）。
+- **测试**：后端 **76 单测**（pricing 16、gateway 18、identity 14、billing 24、rbac 2、crm 1、core 1）。billing 含 charge 10 + margin 7（含超大年份回归）+ export 3（xlsx zip-magic smoke）+ email_cron 4（prev_period / sent_this_month 防重 / build_html / should_send 自愈）。M3 片A+B 另经 29 项端到端 smoke（已脚本化 `backend/scripts/smoke_crm.sh`，自起自停 server，实测 29/29；数据域读/写隔离、改派事务/幂等/历史、404 不泄露、幽灵 sales 校验、finance 越权写拦截、代客开户/充值/越域/业绩归因）。
 - **后台任务**：`rise_billing::spawn_email_cron`（main.rs 在 DB 连通时启动）——月度毛利月报邮件 cron（lettre SMTP；`RR_BILLING_EMAIL_ENABLED` 开关；**自愈式触发** now≥本月预定时间即补发，`cron_state` 防重，dry-run 支持）。
 - **前端**：`frontend/shell/src/pages/admin/`（`CrudPage` 通用组件 + `resources.ts` 8 实体描述符 + `PricePreview` + `AdminTokenSettings`）；`Login.tsx`（手机号+短信登录）；`src/api/admin.ts`（FK option 加载器 + 价格预览）；`tsc` + `vite build` 绿。
 
 ## 11. 未实现 / 后续切片
 
-- **CRM 后续片（M3）**：片B 销售**代客开户**（事务建 org + user + 首条 assignment）+ **代客充值**（复用 billing 充值，`orders.created_by_sales_id`）；片C **业绩归因聚合**（按 `owner_sales_id` 聚合 `orders` 充值额 / `usage_logs` 消费额，周期过滤 + 下钻）；片D 前端 CRM 控制台。片A 数据域隔离走**端点层 `require_scoped`**（销售=本人名下边界）；完整 RLS 引擎（`user_roles.scope` 注入 + 报表四角色）仍留 M4。`organizations` 邮箱字段（per-org 客户账单邮件前置，见下条财务）亦待片B/后续补。
+- **CRM 后续片（M3）**：~~片B 代客开户/充值~~（**已落地**，见 §14.5）；片C **业绩归因聚合**（按 `owner_sales_id` 聚合 `orders` 充值额 / `usage_logs` 消费额，周期过滤 + 下钻）；片D 前端 CRM 控制台。片A/B 数据域隔离走**端点层 `require_scoped`**（销售=本人名下边界）；完整 RLS 引擎（`user_roles.scope` 注入 + 报表四角色）仍留 M4。`organizations` 邮箱字段（per-org 客户账单邮件前置）仍待后续补。
 - **RBAC 深化**：App 注册时声明权限点（apps 表/manifest，M5）；`user_roles.scope` 行级数据域（供报表 RLS）；superadmin 令牌逃生通道在 RBAC 完整运营后收紧/关闭；`seed_builtins` 目前仅插入不回收——将来从目录删除权限点时需补对账清理（当前只增不删，安全）。
 - **计费正确性（code-review 延后项）**：`prices.next_version` 读-改-写竞态，建议加 `(model,group,billing_unit,version)` 唯一约束（#6，低概率、需表达式索引处理 NULL group）。〔#4 分档单价被折扣污染已修：unit_prices 收紧为扁平数值映射，分档定价待专门结构。〕
 - **管理台增强**：非 org 维度可清空字段（api_key 预算/白名单、channel adapter_config、route priority/weight）的后端 null 清空仅 org 走 double_option；字段级 i18n（表单标签中文直出）。〔#7 前端 FK 选项 memo 陈旧已修。〕
@@ -344,7 +348,7 @@ sequenceDiagram
 - **依赖方向** identity→rbac→core/entity 无环：`require`/JWT 留在 identity，rbac 保持纯逻辑+实体；角色授予 HTTP 端点放 `identity::role_admin`（避免 rbac→identity 循环）。
 - 内置角色权限矩阵：admin=全量；finance=billing+pricing+crm.read(.all)；ops=gateway；sales=identity+crm.read+crm.write；customer=无。
 
-## 14. M3 CRM 片A：客户档案 + 跟进 + 归属（本片）
+## 14. M3 CRM 片A+B：客户档案 + 跟进 + 归属 + 代客开户/充值
 
 ### 14.1 数据模型（2 张新表）
 
@@ -371,4 +375,11 @@ sequenceDiagram
 
 - `cargo fmt` / `clippy` 干净；`crm` 单测 1（跟进内容 trim + 长度边界，含中文计 char 数）；全 workspace 编译 + 76 单测绿。
 - 迁移 `up` / `down -n 2` / 再 `up` 对称验证（真实 PG）；表结构、FK CASCADE、复合索引、`active` 默认值与设计一致。
-- 21 项端到端 smoke **已固化为 `backend/scripts/smoke_crm.sh`**（自起/自停 server + 灌数据 + 21 断言，可重跑、可入 CI；实测 21/21 绿）：assign 归属、销售列表仅本人名下、越域客户/跟进 404、跟进 author 归属、空内容 400、归属历史、幂等 assign 不增历史、改派后历史 2 条仅 1 active、改派后可见性翻转、幽灵 sales 400、超管全量、**finance 越权写拦截（crm.read.all 无 crm.write → 403）**。
+- 29 项端到端 smoke **已固化为 `backend/scripts/smoke_crm.sh`**（自起/自停 server + 灌数据 + 29 断言，可重跑、可入 CI；实测 29/29 绿）：片A 21 项（数据域读/写隔离、越域客户/跟进 404、跟进 author 归属、空内容 400、归属历史/幂等/改派翻转、幽灵 sales 400、超管全量、finance 越权写 403）+ 片B 8 项（代客开户归属本人/建账号/首条 active 归属/手机号唯一 400、代客充值 Paid+归因+入账余额、越域充值 404、finance 无 crm.write 开户 403）。
+
+### 14.5 销售代客开户 + 代客充值（片B）
+
+- **零新表**：复用 `users`（phone unique）/`orders`（已有 `created_by_sales_id`）/`customer_assignments`（片A）。基建复用 `rise_identity::valid_phone`、`rise_billing::recharge_wallet`（`wallet::recharge` 别名重导出，避开 billing 内同名 HTTP handler）。crm crate 新增对 rise-billing 的依赖（无环：billing 不依赖 crm）。
+- **代客开户 `POST /api/crm/customers`（crm.write）**：`require_scoped(crm.write, crm.read.all)` 决议归属——受限销售强制归己（`owned_by`），全量权限（管理员/超管）须显式指定 `owner_sales_id`（校验存在）。事务建 org + user（无密码，客户后续手机号+短信登录）+ 首条 active assignment，三者原子（避免孤儿组织/无归属/无账号）。手机号格式 + 唯一校验（已注册 400，DB 唯一约束兜底）。
+- **代客充值 `POST /api/crm/customers/{org_id}/recharge`（crm.write）**：`load_scoped_org` 数据域校验（销售仅给自己名下，越域 404）。一步直接 Paid：事务内建 Paid 订单（`created_by_sales_id`=操作者，供片C 业绩归因）+ `recharge_wallet`（同事务 savepoint 入账），原子——绝不建单不入账。金额 round_dp(8) + 正数 + 上限校验。
+- **验证**：smoke 断言 22–29 覆盖上述路径 + 越权（finance 无 crm.write）；fmt + clippy + 76 单测 + smoke 29/29 全绿。
