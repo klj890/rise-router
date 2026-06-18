@@ -134,7 +134,8 @@ pub async fn run(
 
     if let Some((column, val)) = &rls {
         values.push(val.clone());
-        wheres.push(format!("{} = ${}", column, values.len()));
+        // 列名用双引号界定标识符：避免与 PG 保留字（如 user）冲突导致语法/语义错误
+        wheres.push(format!("\"{}\" = ${}", column, values.len()));
     }
     // 时间窗（source 须有 time_column）
     if req.from.is_some() || req.to.is_some() {
@@ -145,13 +146,13 @@ pub async fn run(
             let dt = chrono::DateTime::parse_from_rfc3339(from)
                 .map_err(|_| AppError::BadRequest("invalid 'from' (RFC3339)".into()))?;
             values.push(Value::from(dt));
-            wheres.push(format!("{} >= ${}", tcol, values.len()));
+            wheres.push(format!("\"{}\" >= ${}", tcol, values.len()));
         }
         if let Some(to) = &req.to {
             let dt = chrono::DateTime::parse_from_rfc3339(to)
                 .map_err(|_| AppError::BadRequest("invalid 'to' (RFC3339)".into()))?;
             values.push(Value::from(dt));
-            wheres.push(format!("{} < ${}", tcol, values.len()));
+            wheres.push(format!("\"{}\" < ${}", tcol, values.len()));
         }
     }
 

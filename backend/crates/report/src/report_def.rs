@@ -2,6 +2,8 @@
 //!
 //! 报表只能基于数据集（创建时校验 dataset 存在 + 主体对其有访问权）。可见性：private 仅 owner，
 //! 其余（role/org）对持 report.read 者可见（片A 简化；细粒度 role/org 共享留后续）。
+use std::collections::HashMap;
+
 use axum::{
     extract::{Path, State},
     http::HeaderMap,
@@ -9,8 +11,22 @@ use axum::{
 };
 use rise_core::{AppError, AppResult, AppState};
 use rise_entity::{datasets, report_definitions};
+use rise_identity::Principal;
 use sea_orm::{ActiveModelTrait, EntityTrait, QueryOrder, Set};
 use serde::Deserialize;
+
+/// 报表所基于数据集的访问权校验：主体须持该数据集 `required_permission`。
+/// 否则即便报表可见性放开，也会从高权限数据集报表泄露 name/config 元数据（BOLA）。
+async fn dataset_perm_ok(
+    db: &sea_orm::DatabaseConnection,
+    dataset_id: i32,
+    principal: &Principal,
+) -> AppResult<bool> {
+    let ds = datasets::Entity::find_by_id(dataset_id).one(db).await?;
+    Ok(ds
+        .map(|d| principal.perms.contains(&d.required_permission))
+        .unwrap_or(false))
+}
 
 #[derive(Debug, Deserialize)]
 pub struct CreateReq {
@@ -34,6 +50,13 @@ pub async fn list(
         return Err(AppError::Forbidden);
     }
     let db = state.db()?;
+    // 数据集权限映射：可见性还须叠加"对其数据集有访问权"（否则高权限数据集报表元数据泄露）
+    let perm_by_dataset: HashMap<i32, String> = datasets::Entity::find()
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|d| (d.id, d.required_permission))
+        .collect();
     let all = report_definitions::Entity::find()
         .order_by_desc(report_definitions::Column::Id)
         .all(db)
@@ -41,9 +64,14 @@ pub async fn list(
     let visible = all
         .into_iter()
         .filter(|r| {
-            r.visibility != "private"
-                || principal.role == "admin"
-                || (r.owner_user_id.is_some() && r.owner_user_id == principal.user_id)
+            let ds_ok = perm_by_dataset
+                .get(&r.dataset_id)
+                .map(|p| principal.perms.contains(p))
+                .unwrap_or(false);
+            ds_ok
+                && (r.visibility != "private"
+                    || principal.role == "admin"
+                    || (r.owner_user_id.is_some() && r.owner_user_id == principal.user_id))
         })
         .collect();
     Ok(Json(visible))
@@ -106,6 +134,10 @@ pub async fn get_one(
         .one(db)
         .await?
         .ok_or(AppError::NotFound)?;
+    // 先校验对底层数据集有访问权（防越数据集读报表元数据 BOLA）
+    if !dataset_perm_ok(db, r.dataset_id, &principal).await? {
+        return Err(AppError::NotFound); // 不泄露存在性
+    }
     let visible = r.visibility != "private"
         || principal.role == "admin"
         || (r.owner_user_id.is_some() && r.owner_user_id == principal.user_id);
@@ -122,6 +154,10 @@ pub async fn delete(
     Path(id): Path<i32>,
 ) -> AppResult<Json<serde_json::Value>> {
     let principal = rise_identity::resolve_principal(&state, &headers).await?;
+    // 删除属定义类写操作：须持 report.define（防 define 被收回后仍能删历史报表）
+    if !principal.perms.contains("report.define") {
+        return Err(AppError::Forbidden);
+    }
     let db = state.db()?;
     let r = report_definitions::Entity::find_by_id(id)
         .one(db)
