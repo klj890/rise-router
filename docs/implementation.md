@@ -1,6 +1,8 @@
 # Rise Router 已实现功能与数据库设计（as-built）
 
-> 版本：v0.8 · 2026-06-18 · 本文记录**已落地的真实实现状态**（与设计蓝图 [data-model.md](./data-model.md)/[architecture.md](./architecture.md) 区分）。表结构取自运行库真实 schema。
+> 版本：v0.9 · 2026-06-18 · 本文记录**已落地的真实实现状态**（与设计蓝图 [data-model.md](./data-model.md)/[architecture.md](./architecture.md) 区分）。表结构取自运行库真实 schema。
+>
+> v0.9 增量（分支 `feat/m4-report-slice-b`）：⑨ **M4 报表 片B —— 业绩/账单/运维数据集（零引擎改动）**。验证 片A 契约：仅加 source 注册 + seed，引擎/表零改。新增 1 个共享 source `orders`（账单+业绩复用：dims status/pay_channel/created_by_sales_id/org_id/day；mets order_count/order_amount/paid_amount(filter status=2 Paid)/paid_count/customer_count）+ 给 `usage` source 补 `p95_latency`(percentile_cont)/`stream_ratio`；新增 3 数据集 seed：`billing`（customer→org_id / finance·admin 全量）、`sales_perf`（sales→created_by_sales_id / finance·admin 全量，perm=report.dataset.crm）、`channel_health`（ops·admin only，不暴露 revenue，perm=report.dataset.ops）。smoke 扩至 **23/23**（含三新数据集 RLS + 列表权限过滤）。缺口：运维错误率/成本/任务队列待 片E 埋点。详见 §15.7。
 >
 > v0.8 增量（分支 `feat/m4-report-slice-a`）：⑨ **M4 监控报表 片A 内核** —— 策展语义层「**不开放原始库**」落地：新增 `datasets`（source 白名单 + 策展 metrics/dimensions + 按角色 `rls_rule`）/ `report_definitions`（只能基于数据集）两表；**RLS 行级隔离查询引擎**（`report/src/engine.rs`）复用 RBAC 与新增 `rise_identity::Principal`（有效角色 + org/user + 权限集），安全三步：权限门禁 → 按角色取 `rls_rule` 分支（缺键=403 / null=全量 / {column,param}=绑定参数过滤）→ 仅拼装 source 白名单受控标识符 + 值一律绑定参数注入（无注入面）。新增 RBAC 权限点 `report.read`/`report.define`/`report.dataset.{finance,crm,ops}`/`report.export` + `effective_role`。内置「用量」数据集打通端到端（customer 仅见本组织 / finance·admin 全量 / sales 无分支 403）。狗粮：报表为内部一等 App，与第三方走同一数据集契约。15 项 smoke 全过（`scripts/smoke_report.sh`）。详见 §15。
 >
@@ -423,3 +425,16 @@ sequenceDiagram
 ### 15.6 片A 边界 / 后续
 
 - 片A 仅落「用量」数据集打通内核；**片B** 增业绩/账单/运维数据集（零引擎改动，仅加 source 注册 + seed），其中销售业绩需 `owner_sales_id` JOIN（用量按归属）。**片C** 前端报表构建器（依赖已冻结的 query API 契约）。**片D** 导出(xlsx/PDF)+订阅(邮件/webhook，复用 M2 cron)。**片E** 运维埋点补缺（`usage_logs.cost_amount` 毛利成本、错误率字段、任务队列）。
+
+### 15.7 片B：业绩/账单/运维数据集（v0.9，零引擎改动）
+
+验证 片A 冻结契约的关键一片——**新增 3 个数据集仅靠加 source 注册 + seed 数据，`engine.rs` 与表结构零改动**（设计目标达成）。
+
+- **共享 source `orders`**（`source.rs`，账单 + 业绩复用）：relation=orders，time_column=created_at；dims `status / pay_channel / created_by_sales_id / org_id / day`；mets `order_count=count(*)` / `order_amount=coalesce(sum(amount),0)` / `paid_amount=coalesce(sum(amount) filter (where status=2),0)` / `paid_count=count(*) filter (where status=2)` / `customer_count=count(distinct org_id)`（Paid=2 为 OrderStatus 枚举 smallint）。
+- **`usage` source 增补**：`p95_latency=percentile_cont(0.95) within group (order by latency_ms)`（有序集聚合）、`stream_ratio=avg(case when is_stream then 1 else 0 end)`——运维数据集用。
+- **数据集 seed**（`dataset.rs` builtin_datasets）：
+  - `billing`「账单明细」source=orders，rls `{customer:{org_id,current_org}, finance:null, admin:null}`，perm `report.read`（客户看本组织账单，财务/管理员全量）。
+  - `sales_perf`「销售业绩」source=orders，rls `{sales:{created_by_sales_id,current_user}, finance:null, admin:null}`，perm `report.dataset.crm`。归因口径=下单发起销售（`created_by_sales_id`），非当前归属（`owner_sales_id`）——存量按当前归属统计需 JOIN，留后续策展 VIEW。
+  - `channel_health`「渠道健康（运维）」source=usage，metrics 不含 revenue，rls `{ops:null, admin:null}`（customer/sales/finance 无分支=禁止），perm `report.dataset.ops`。
+- **验证**：`fmt`/`clippy -D warnings`/全 workspace 测试绿；smoke 扩至 **23/23**（`smoke_report.sh` 加 ops 用户 + orders 灌数，2099 时间窗隔离）：billing customer 仅本组织(order_count=2/paid=100) vs admin 全量(3/1099)、sales_perf sales 仅本人(paid=100/customer_count=1)、channel_health ops 全量(calls=3 + p95/stream 可算)、customer 查 sales_perf/channel_health 403、数据集列表按权限过滤（customer 见 usage/billing 不见 sales_perf/channel_health）。
+- **运维数据缺口（→ 片E 埋点补缺）**：`usage_logs` 无 http_status/error 列→错误率无法算；`cost_amount` 恒 NULL→渠道成本/毛利缺；`tasks` 队列未实现；渠道 `status` 在 channels 表需 JOIN（单表 source 暂不纳入）。本片运维数据集先覆盖 calls/latency/p95/stream by-channel。

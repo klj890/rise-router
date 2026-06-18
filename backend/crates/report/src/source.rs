@@ -39,39 +39,102 @@ impl Source {
 }
 
 /// 已注册 source 白名单。新数据源 = 在此加一条（+ 必要时建策展视图迁移），属代码改动。
-static SOURCES: &[Source] = &[Source {
-    key: "usage",
-    relation: "usage_logs",
-    time_column: Some("created_at"),
-    dims: &[
-        Dim {
-            key: "model_id",
-            expr: "model_id",
-        },
-        Dim {
-            key: "channel_id",
-            expr: "channel_id",
-        },
-        Dim {
-            key: "day",
-            expr: "date_trunc('day', created_at)",
-        },
-    ],
-    mets: &[
-        Met {
-            key: "calls",
-            agg: "count(*)",
-        },
-        Met {
-            key: "revenue",
-            agg: "coalesce(sum(charged_amount), 0)",
-        },
-        Met {
-            key: "avg_latency",
-            agg: "avg(latency_ms)",
-        },
-    ],
-}];
+static SOURCES: &[Source] = &[
+    Source {
+        key: "usage",
+        relation: "usage_logs",
+        time_column: Some("created_at"),
+        dims: &[
+            Dim {
+                key: "model_id",
+                expr: "model_id",
+            },
+            Dim {
+                key: "channel_id",
+                expr: "channel_id",
+            },
+            Dim {
+                key: "day",
+                expr: "date_trunc('day', created_at)",
+            },
+        ],
+        mets: &[
+            Met {
+                key: "calls",
+                agg: "count(*)",
+            },
+            Met {
+                key: "revenue",
+                agg: "coalesce(sum(charged_amount), 0)",
+            },
+            Met {
+                key: "avg_latency",
+                agg: "avg(latency_ms)",
+            },
+            // P95 延迟（有序集聚合，合法 PG；NULL latency 自动忽略）——运维数据集用
+            Met {
+                key: "p95_latency",
+                agg: "percentile_cont(0.95) within group (order by latency_ms)",
+            },
+            // 流式调用占比 0..1——运维数据集用
+            Met {
+                key: "stream_ratio",
+                agg: "avg(case when is_stream then 1 else 0 end)",
+            },
+        ],
+    },
+    // orders：充值订单（账单 + 销售业绩共用）。Paid=2（OrderStatus 枚举 smallint）。
+    Source {
+        key: "orders",
+        relation: "orders",
+        time_column: Some("created_at"),
+        dims: &[
+            Dim {
+                key: "status",
+                expr: "status",
+            },
+            Dim {
+                key: "pay_channel",
+                expr: "pay_channel",
+            },
+            Dim {
+                key: "created_by_sales_id",
+                expr: "created_by_sales_id",
+            },
+            Dim {
+                key: "org_id",
+                expr: "org_id",
+            },
+            Dim {
+                key: "day",
+                expr: "date_trunc('day', created_at)",
+            },
+        ],
+        mets: &[
+            Met {
+                key: "order_count",
+                agg: "count(*)",
+            },
+            Met {
+                key: "order_amount",
+                agg: "coalesce(sum(amount), 0)",
+            },
+            // 已支付金额/单数：filter status=2(Paid)
+            Met {
+                key: "paid_amount",
+                agg: "coalesce(sum(amount) filter (where status = 2), 0)",
+            },
+            Met {
+                key: "paid_count",
+                agg: "count(*) filter (where status = 2)",
+            },
+            Met {
+                key: "customer_count",
+                agg: "count(distinct org_id)",
+            },
+        ],
+    },
+];
 
 /// 按注册键取 source。
 pub fn source(key: &str) -> Option<&'static Source> {
