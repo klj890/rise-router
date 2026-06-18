@@ -9,7 +9,7 @@ use axum::{
 };
 use rise_core::{AppError, AppResult, AppState};
 use rise_entity::datasets;
-use sea_orm::{ActiveModelTrait, EntityTrait, QueryOrder, Set};
+use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, Set};
 
 use crate::engine::{self, QueryReq, QueryResp};
 
@@ -23,14 +23,13 @@ pub async fn list(
         return Err(AppError::Forbidden);
     }
     let db = state.db()?;
-    let all = datasets::Entity::find()
+    // 按 required_permission ∈ 主体权限集 过滤下推 DB（避免全表载入内存）
+    let my_perms: Vec<String> = principal.perms.iter().cloned().collect();
+    let visible = datasets::Entity::find()
+        .filter(datasets::Column::RequiredPermission.is_in(my_perms))
         .order_by_asc(datasets::Column::Id)
         .all(db)
         .await?;
-    let visible = all
-        .into_iter()
-        .filter(|d| principal.perms.contains(&d.required_permission))
-        .collect();
     Ok(Json(visible))
 }
 

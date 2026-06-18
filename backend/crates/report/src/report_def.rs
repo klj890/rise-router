@@ -66,12 +66,13 @@ pub async fn list(
         return Err(AppError::Forbidden);
     }
     let db = state.db()?;
-    // 主体有权访问的数据集 id 集（数据集量小，单查后下推为 dataset_id IN (...)）
+    // 主体有权访问的数据集 id 集：按 required_permission ∈ 主体权限集 过滤下推 DB
+    let my_perms: Vec<String> = principal.perms.iter().cloned().collect();
     let accessible: Vec<i32> = datasets::Entity::find()
+        .filter(datasets::Column::RequiredPermission.is_in(my_perms))
         .all(db)
         .await?
         .into_iter()
-        .filter(|d| principal.perms.contains(&d.required_permission))
         .map(|d| d.id)
         .collect();
     if accessible.is_empty() {
