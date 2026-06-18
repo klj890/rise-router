@@ -68,10 +68,19 @@ pub async fn recharge(
         return Err(AppError::BadRequest("pay_channel too long (max 32)".into()));
     }
     let created_by = access.actor_id(); // 操作者（超管令牌为 None）→ 业绩归因
-    let memo = req
+    let memo = match req
         .memo
         .map(|s| s.trim().to_owned())
-        .filter(|s| !s.is_empty());
+        .filter(|s| !s.is_empty())
+    {
+        Some(m) => {
+            if m.chars().count() > 255 {
+                return Err(AppError::BadRequest("memo too long (max 255)".into()));
+            }
+            Some(m)
+        }
+        None => None,
+    };
     let now = chrono::Utc::now().fixed_offset();
 
     // 事务：建 Paid 订单 + 同事务入账（recharge 在 txn 内作 savepoint），原子——绝不建单不入账或反之。
@@ -85,7 +94,7 @@ pub async fn recharge(
                     pay_channel: Set(pay_channel),
                     trade_no: Set(None),
                     status: Set(orders::OrderStatus::Paid),
-                    memo: Set(memo),
+                    memo: Set(memo.clone()),
                     created_at: Set(now),
                     paid_at: Set(Some(now)),
                     ..Default::default()
@@ -98,7 +107,7 @@ pub async fn recharge(
                     amount,
                     "order",
                     Some(order.id as i64),
-                    None,
+                    memo,
                     now,
                 )
                 .await?;

@@ -72,6 +72,16 @@ pub async fn create_customer(
             if users::Entity::find_by_id(sid).one(db).await?.is_none() {
                 return Err(AppError::BadRequest("owner_sales_id not found".into()));
             }
+            // 目标用户须确有 sales 角色（防管理员误把客户归属给非销售人员）
+            if !rise_rbac::list_user_roles(db, sid)
+                .await?
+                .iter()
+                .any(|r| r.slug == "sales")
+            {
+                return Err(AppError::BadRequest(
+                    "owner_sales_id is not a sales user".into(),
+                ));
+            }
             sid
         }
     };
@@ -142,9 +152,20 @@ pub async fn create_customer(
             })
         })
         .await
-        .map_err(|e| match e {
-            TransactionError::Connection(db) => AppError::Db(db),
-            TransactionError::Transaction(app_err) => app_err,
+        .map_err(|e| {
+            let app_err = match e {
+                TransactionError::Connection(db) => AppError::Db(db),
+                TransactionError::Transaction(app_err) => app_err,
+            };
+            // 并发兜底：事务外预检后仍可能两请求同时插入同一手机号，
+            // DB 唯一约束冲突（500）→ 归一为 400，与预检语义一致。
+            if let AppError::Db(ref db_err) = app_err {
+                let msg = db_err.to_string();
+                if msg.contains("duplicate key") || msg.contains("unique constraint") {
+                    return AppError::BadRequest("phone already registered".into());
+                }
+            }
+            app_err
         })?;
 
     tracing::info!(

@@ -2386,6 +2386,7 @@ dependencies = [
  "rise-core",
  "rise-entity",
  "rise-identity",
+ "rise-rbac",
  "rust_decimal",
  "sea-orm",
  "serde",
