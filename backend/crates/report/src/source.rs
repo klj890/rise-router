@@ -39,39 +39,104 @@ impl Source {
 }
 
 /// 已注册 source 白名单。新数据源 = 在此加一条（+ 必要时建策展视图迁移），属代码改动。
-static SOURCES: &[Source] = &[Source {
-    key: "usage",
-    relation: "usage_logs",
-    time_column: Some("created_at"),
-    dims: &[
-        Dim {
-            key: "model_id",
-            expr: "model_id",
-        },
-        Dim {
-            key: "channel_id",
-            expr: "channel_id",
-        },
-        Dim {
-            key: "day",
-            expr: "date_trunc('day', created_at)",
-        },
-    ],
-    mets: &[
-        Met {
-            key: "calls",
-            agg: "count(*)",
-        },
-        Met {
-            key: "revenue",
-            agg: "coalesce(sum(charged_amount), 0)",
-        },
-        Met {
-            key: "avg_latency",
-            agg: "avg(latency_ms)",
-        },
-    ],
-}];
+static SOURCES: &[Source] = &[
+    Source {
+        key: "usage",
+        relation: "usage_logs",
+        time_column: Some("created_at"),
+        dims: &[
+            Dim {
+                key: "model_id",
+                expr: "model_id",
+            },
+            Dim {
+                key: "channel_id",
+                expr: "channel_id",
+            },
+            Dim {
+                key: "day",
+                expr: "date_trunc('day', created_at)",
+            },
+        ],
+        mets: &[
+            Met {
+                key: "calls",
+                agg: "count(*)",
+            },
+            Met {
+                key: "revenue",
+                agg: "coalesce(sum(charged_amount), 0)",
+            },
+            Met {
+                key: "avg_latency",
+                agg: "avg(latency_ms)",
+            },
+            // P95 延迟（有序集聚合）——latency_ms 是 integer，显式 ::float8 转换避免
+            // percentile_cont 在部分 PG 版本因排序列类型不匹配报错；参数 0.95::float8 同理。
+            Met {
+                key: "p95_latency",
+                agg: "percentile_cont(0.95::float8) within group (order by latency_ms::float8)",
+            },
+            // 流式调用占比 0..1——运维数据集用（is_stream::int 比 case when 更惯用）
+            Met {
+                key: "stream_ratio",
+                agg: "avg(is_stream::int)",
+            },
+        ],
+    },
+    // orders：充值订单（账单 + 销售业绩共用）。Paid=2（OrderStatus 枚举 smallint）。
+    Source {
+        key: "orders",
+        relation: "orders",
+        time_column: Some("created_at"),
+        dims: &[
+            // 状态码映射可读文本（策展语义层：前端/财务看 Paid 而非 "2"）
+            Dim {
+                key: "status",
+                expr: "CASE status WHEN 1 THEN 'Pending' WHEN 2 THEN 'Paid' WHEN 3 THEN 'Failed' WHEN 4 THEN 'Refunded' ELSE 'Unknown' END",
+            },
+            Dim {
+                key: "pay_channel",
+                expr: "pay_channel",
+            },
+            Dim {
+                key: "created_by_sales_id",
+                expr: "created_by_sales_id",
+            },
+            Dim {
+                key: "org_id",
+                expr: "org_id",
+            },
+            Dim {
+                key: "day",
+                expr: "date_trunc('day', created_at)",
+            },
+        ],
+        mets: &[
+            Met {
+                key: "order_count",
+                agg: "count(*)",
+            },
+            Met {
+                key: "order_amount",
+                agg: "coalesce(sum(amount), 0)",
+            },
+            // 已支付金额/单数：filter status=2(Paid)
+            Met {
+                key: "paid_amount",
+                agg: "coalesce(sum(amount) filter (where status = 2), 0)",
+            },
+            Met {
+                key: "paid_count",
+                agg: "count(*) filter (where status = 2)",
+            },
+            Met {
+                key: "customer_count",
+                agg: "count(distinct org_id)",
+            },
+        ],
+    },
+];
 
 /// 按注册键取 source。
 pub fn source(key: &str) -> Option<&'static Source> {

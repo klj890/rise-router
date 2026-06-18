@@ -34,7 +34,7 @@ SERVER_PID=""
 cleanup() {
   # 清理测试行（2099 行）+ 测试报表定义
   docker exec "$PGC" psql -U rise -d rise_router -tAc \
-    "DELETE FROM usage_logs WHERE created_at >= '2099-01-01';" >/dev/null 2>&1
+    "DELETE FROM usage_logs WHERE created_at >= '2099-01-01'; DELETE FROM orders WHERE created_at >= '2099-01-01';" >/dev/null 2>&1
   [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null
   wait "$SERVER_PID" 2>/dev/null
 }
@@ -92,6 +92,7 @@ echo "▶ 准备数据（1 客户 + 1 销售 + 另一组织 + usage_logs）..."
 TS=$(date +%s)
 PHONE_CUST="13$(printf '%09d' $(( (TS + RANDOM) % 1000000000 )))"
 PHONE_SALES="13$(printf '%09d' $(( (TS + RANDOM + 7) % 1000000000 )))"
+PHONE_OPS="13$(printf '%09d' $(( (TS + RANDOM + 19) % 1000000000 )))"
 
 login() {
   req POST /api/identity/auth/send-code "" "{\"phone\":\"$1\"}"
@@ -101,10 +102,12 @@ login() {
 }
 login "$PHONE_CUST"; JWT_CUST=$TOKEN; UID_CUST=$LUID; ORG_CUST=$LORG
 login "$PHONE_SALES"; JWT_SALES=$TOKEN; UID_SALES=$LUID
+login "$PHONE_OPS"; JWT_OPS=$TOKEN; UID_OPS=$LUID
 [ -n "$ORG_CUST" ] && [ "$ORG_CUST" != "null" ] || { echo "✗ 客户登录失败"; cat "$LOG"; exit 1; }
 
 req POST "/api/identity/users/$UID_CUST/roles" "$AUTH_ADMIN" '{"role_slug":"customer"}'
 req POST "/api/identity/users/$UID_SALES/roles" "$AUTH_ADMIN" '{"role_slug":"sales"}'
+req POST "/api/identity/users/$UID_OPS/roles" "$AUTH_ADMIN" '{"role_slug":"ops"}'
 
 # 另一组织（其用量不应被 customer 看到）
 req POST /api/identity/organizations "$AUTH_ADMIN" '{"name":"SMOKE-RPT-OTHER","org_type":"Enterprise"}'
@@ -116,7 +119,14 @@ pg "$INS
   ($ORG_CUST, 1, 7, 3, 'token', '{\"input\":10,\"output\":5}', 10, 10, false, 100, '$T0'),
   ($ORG_CUST, 1, 7, 3, 'token', '{\"input\":20,\"output\":8}', 20, 20, false, 200, '$T0'),
   ($ORG_OTHER, 1, 9, 4, 'token', '{\"input\":99,\"output\":9}', 99, 99, false, 300, '2099-06-01T01:00:00Z');" >/dev/null
-echo "✓ orgCust=${ORG_CUST} orgOther=${ORG_OTHER} (灌 3 行 usage)"
+
+# orders（账单/业绩）：销售 UID_SALES 为 orgCust 下 2 单（100 Paid / 50 Pending）；orgOther 1 单（999 Paid，无销售）
+OINS="INSERT INTO orders (org_id, created_by_sales_id, amount, pay_channel, status, created_at) VALUES"
+pg "$OINS
+  ($ORG_CUST, $UID_SALES, 100, 'transfer', 2, '$T0'),
+  ($ORG_CUST, $UID_SALES, 50, 'transfer', 1, '$T0'),
+  ($ORG_OTHER, NULL, 999, 'transfer', 2, '$T0');" >/dev/null
+echo "✓ orgCust=${ORG_CUST} orgOther=${ORG_OTHER} salesUid=${UID_SALES} opsUid=${UID_OPS} (灌 3 usage + 3 orders)"
 echo ""
 
 # ============ 3. 断言 ============
@@ -181,9 +191,49 @@ expect 200 "14 报表删除 200"
 req POST /api/report/reports "$AUTH_ADMIN" '{"dataset_slug":"nope","name":"X"}'
 expect 400 "15 基于不存在数据集 → 400"
 
+# ===== 片B 新数据集：billing / sales_perf / channel_health =====
+
+# 16) billing admin 全量：order_count=3 paid_amount=1099（100+999）
+req POST /api/report/datasets/billing/query "$AUTH_ADMIN" "{\"metrics\":[\"order_count\",\"paid_amount\",\"paid_count\"],$WIN}"
+if [ "$CODE" = "200" ] && printf '%s' "$BODY" | jq -e '.rls_filtered==false and .rows[0].order_count==3 and .rows[0].paid_amount==1099 and .rows[0].paid_count==2' >/dev/null; then
+  ok "16 billing admin 全量 order_count=3 paid_amount=1099"; else ng "16 billing admin"; fi
+
+# 17) billing customer RLS：仅本组织 order_count=2 paid_amount=100 paid_count=1 ★
+req POST /api/report/datasets/billing/query "$(authj "$JWT_CUST")" "{\"metrics\":[\"order_count\",\"paid_amount\",\"paid_count\"],$WIN}"
+if [ "$CODE" = "200" ] && printf '%s' "$BODY" | jq -e '.rls_filtered==true and .rows[0].order_count==2 and .rows[0].paid_amount==100 and .rows[0].paid_count==1' >/dev/null; then
+  ok "17 billing customer RLS 仅本组织 order_count=2 paid_amount=100"; else ng "17 billing customer RLS"; fi
+
+# 18) sales_perf sales RLS：仅本人 paid_amount=100 customer_count=1 ★
+req POST /api/report/datasets/sales_perf/query "$(authj "$JWT_SALES")" "{\"metrics\":[\"paid_amount\",\"order_count\",\"customer_count\"],$WIN}"
+if [ "$CODE" = "200" ] && printf '%s' "$BODY" | jq -e '.rls_filtered==true and .rows[0].paid_amount==100 and .rows[0].order_count==2 and .rows[0].customer_count==1' >/dev/null; then
+  ok "18 sales_perf sales RLS 仅本人 paid_amount=100 customer_count=1"; else ng "18 sales_perf sales RLS"; fi
+
+# 19) sales_perf customer 无 report.dataset.crm → 403
+req POST /api/report/datasets/sales_perf/query "$(authj "$JWT_CUST")" "{\"metrics\":[\"paid_amount\"],$WIN}"
+expect 403 "19 customer 查 sales_perf（无权限点）→ 403"
+
+# 20) channel_health ops 全量：calls=3, p95=290(percentile_cont over 100/200/300), stream_ratio=0
+req POST /api/report/datasets/channel_health/query "$(authj "$JWT_OPS")" "{\"metrics\":[\"calls\",\"p95_latency\",\"stream_ratio\"],$WIN}"
+if [ "$CODE" = "200" ] && printf '%s' "$BODY" | jq -e '.rls_filtered==false and .rows[0].calls==3 and .rows[0].p95_latency==290 and .rows[0].stream_ratio==0' >/dev/null; then
+  ok "20 channel_health ops 全量 calls=3 p95=290 stream_ratio=0"; else ng "20 channel_health ops"; fi
+
+# 21) channel_health customer 无 report.dataset.ops → 403
+req POST /api/report/datasets/channel_health/query "$(authj "$JWT_CUST")" "{\"metrics\":[\"calls\"],$WIN}"
+expect 403 "21 customer 查 channel_health（无权限点）→ 403"
+
+# 22) admin 数据集列表含全部 4 个
+req GET /api/report/datasets "$AUTH_ADMIN" ""
+if printf '%s' "$BODY" | jq -e '([.[].slug]|sort) as $s | (["billing","channel_health","sales_perf","usage"]|all(. as $x|$s|index($x)))' >/dev/null; then
+  ok "22 admin 列表含 usage/billing/sales_perf/channel_health"; else ng "22 admin 数据集列表"; fi
+
+# 23) customer 数据集列表仅含 report.read 类（usage/billing），不含 sales_perf/channel_health
+req GET /api/report/datasets "$(authj "$JWT_CUST")" ""
+if printf '%s' "$BODY" | jq -e 'any(.[];.slug=="billing") and (any(.[];.slug=="channel_health")|not) and (any(.[];.slug=="sales_perf")|not)' >/dev/null; then
+  ok "23 customer 列表含 billing 不含 sales_perf/channel_health（权限过滤）"; else ng "23 customer 数据集列表过滤"; fi
+
 echo ""
 echo "════════════════════════════════"
 printf '  通过 \033[32m%d\033[0m / 失败 \033[31m%d\033[0m\n' "$PASS" "$FAIL"
-[ "$FAIL" = 0 ] && echo "  ✅ M4 报表片A smoke 全过" || echo "  ❌ 有失败项"
+[ "$FAIL" = 0 ] && echo "  ✅ M4 报表片A+B smoke 全过" || echo "  ❌ 有失败项"
 echo "════════════════════════════════"
 [ "$FAIL" = 0 ]
