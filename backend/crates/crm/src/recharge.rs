@@ -59,12 +59,19 @@ pub async fn recharge(
     if amount > Decimal::from(MAX_AMOUNT) {
         return Err(AppError::BadRequest("amount exceeds maximum limit".into()));
     }
-    let pay_channel = req.pay_channel.unwrap_or_else(|| "transfer".to_owned());
+    let pay_channel = req
+        .pay_channel
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "transfer".to_owned());
     if pay_channel.chars().count() > 32 {
         return Err(AppError::BadRequest("pay_channel too long (max 32)".into()));
     }
     let created_by = access.actor_id(); // 操作者（超管令牌为 None）→ 业绩归因
-    let memo = req.memo;
+    let memo = req
+        .memo
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty());
     let now = chrono::Utc::now().fixed_offset();
 
     // 事务：建 Paid 订单 + 同事务入账（recharge 在 txn 内作 savepoint），原子——绝不建单不入账或反之。

@@ -86,10 +86,19 @@ pub async fn create_customer(
     }
     let name = validate_name(&req.name)?;
     let org_type = req.org_type.unwrap_or(OrgType::Enterprise);
-    let nickname = req
+    let nickname = match req
         .nickname
         .map(|s| s.trim().to_owned())
-        .filter(|s| !s.is_empty());
+        .filter(|s| !s.is_empty())
+    {
+        Some(nick) => {
+            if nick.chars().count() > 64 {
+                return Err(AppError::BadRequest("nickname too long (max 64)".into()));
+            }
+            Some(nick)
+        }
+        None => None,
+    };
     let now = chrono::Utc::now().fixed_offset();
 
     // 事务：建 org + user + 首条 active assignment，原子（避免孤儿组织 / 无归属客户 / 无登录账号）。
