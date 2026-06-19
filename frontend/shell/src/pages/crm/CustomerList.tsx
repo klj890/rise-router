@@ -40,12 +40,14 @@ export default function CustomerList() {
 
   const cursor = stack.length ? stack[stack.length - 1] : undefined
 
+  // 多取一条（PAGE+1）探测是否还有下一页：满 PAGE 但无更多时不再误显「下一页」（避免点进空白页）。
   const listQuery = useQuery({
     queryKey: ['crm-customers', ownerFilter, cursor],
-    queryFn: () => listCustomers({ owner_sales_id: ownerFilter, limit: PAGE, cursor }),
+    queryFn: () => listCustomers({ owner_sales_id: ownerFilter, limit: PAGE + 1, cursor }),
   })
-  const rows = listQuery.data ?? []
-  const hasNext = rows.length === PAGE
+  const rawRows = listQuery.data ?? []
+  const hasNext = rawRows.length > PAGE
+  const rows = hasNext ? rawRows.slice(0, PAGE) : rawRows
 
   const onboardMutation = useMutation({
     mutationFn: (req: OnboardReq) => onboardCustomer(req),
@@ -61,12 +63,13 @@ export default function CustomerList() {
 
   const applyFilter = () => {
     const v = ownerInput.trim()
-    // 非法数字（字母/符号）→ Number() 得 NaN，传到后端 owner_sales_id 会 400 使页面加载失败；前端先拦。
-    if (v && !Number.isInteger(Number(v))) {
+    const num = Number(v)
+    // 非正整数（字母/符号/负数/0/小数）→ 传后端 owner_sales_id 会 400；前端先拦。
+    if (v && (!Number.isInteger(num) || num <= 0)) {
       message.error('请输入有效的销售 id（正整数）')
       return
     }
-    setOwnerFilter(v ? Number(v) : undefined)
+    setOwnerFilter(v ? num : undefined)
     setStack([])
   }
 
@@ -124,14 +127,14 @@ export default function CustomerList() {
       dataIndex: 'balance',
       key: 'balance',
       align: 'right',
-      render: (v: string) => Number(v).toLocaleString('zh-CN', { minimumFractionDigits: 2 }),
+      render: (v: string) => (Number(v) || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2 }),
     },
     {
       title: '授信',
       dataIndex: 'credit_limit',
       key: 'credit_limit',
       align: 'right',
-      render: (v: string) => Number(v).toLocaleString('zh-CN', { minimumFractionDigits: 2 }),
+      render: (v: string) => (Number(v) || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2 }),
     },
     {
       title: '操作',

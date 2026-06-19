@@ -38,8 +38,10 @@ import {
 } from '../../api/crm'
 import { ORG_TYPE_LABEL, ORG_STATUS_LABEL, ORG_STATUS_COLOR, REALNAME_LABEL } from './labels'
 
-function fmtMoney(v: string): string {
-  return Number(v).toLocaleString('zh-CN', { minimumFractionDigits: 2 })
+function fmtMoney(v: string | null | undefined): string {
+  const num = Number(v)
+  if (v == null || v === '' || Number.isNaN(num)) return '0.00'
+  return num.toLocaleString('zh-CN', { minimumFractionDigits: 2 })
 }
 
 export default function CustomerDetail() {
