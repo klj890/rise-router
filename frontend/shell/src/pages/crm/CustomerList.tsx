@@ -61,6 +61,11 @@ export default function CustomerList() {
 
   const applyFilter = () => {
     const v = ownerInput.trim()
+    // 非法数字（字母/符号）→ Number() 得 NaN，传到后端 owner_sales_id 会 400 使页面加载失败；前端先拦。
+    if (v && !Number.isInteger(Number(v))) {
+      message.error('请输入有效的销售 id（正整数）')
+      return
+    }
     setOwnerFilter(v ? Number(v) : undefined)
     setStack([])
   }
@@ -237,11 +242,22 @@ export default function CustomerList() {
           <Form.Item
             name="phone"
             label="客户手机号"
-            rules={[{ required: true, message: '请填写手机号' }]}
+            rules={[
+              { required: true, message: '请填写手机号' },
+              // 与后端 valid_phone 对齐：11 位、首位 1、次位 3-9、全数字
+              { pattern: /^1[3-9]\d{9}$/, message: '请输入有效的 11 位手机号' },
+            ]}
           >
             <Input placeholder="11 位手机号（客户登录主通道）" maxLength={11} />
           </Form.Item>
-          <Form.Item name="name" label="组织名称" rules={[{ required: true, message: '请填写组织名称' }]}>
+          <Form.Item
+            name="name"
+            label="组织名称"
+            rules={[
+              { required: true, message: '请填写组织名称' },
+              { whitespace: true, message: '组织名称不能全为空格' },
+            ]}
+          >
             <Input placeholder="企业/客户名称" maxLength={128} />
           </Form.Item>
           <Form.Item name="org_type" label="组织类型">
@@ -260,7 +276,12 @@ export default function CustomerList() {
             label="归属销售 id"
             extra="仅管理员/财务可指定；销售本人留空自动归己。"
           >
-            <InputNumber style={{ width: '100%' }} min={1} placeholder="可选（管理员代任意销售开户）" />
+            <InputNumber
+              style={{ width: '100%' }}
+              min={1}
+              precision={0}
+              placeholder="可选（管理员代任意销售开户）"
+            />
           </Form.Item>
         </Form>
       </Modal>

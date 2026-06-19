@@ -249,7 +249,7 @@ export default function CustomerDetail() {
                     loading={notesQuery.isLoading}
                     dataSource={notesQuery.data ?? []}
                     renderItem={(n) => (
-                      <List.Item>
+                      <List.Item key={n.id}>
                         <List.Item.Meta
                           title={
                             <Space>
@@ -324,7 +324,7 @@ export default function CustomerDetail() {
             label="充值金额（元）"
             rules={[{ required: true, message: '请填写金额' }]}
           >
-            <InputNumber style={{ width: '100%' }} min={0.01} step={100} placeholder="正数" />
+            <InputNumber style={{ width: '100%' }} min={0.01} precision={2} step={100} placeholder="正数（元，到分）" />
           </Form.Item>
           <Form.Item name="pay_channel" label="支付渠道">
             <Input placeholder="transfer（对公）/ alipay / wechat" maxLength={32} />
@@ -365,7 +365,7 @@ export default function CustomerDetail() {
             label="改派到销售 id"
             rules={[{ required: true, message: '请填写目标销售 id' }]}
           >
-            <InputNumber style={{ width: '100%' }} min={1} placeholder="users.id（须为 sales 角色）" />
+            <InputNumber style={{ width: '100%' }} min={1} precision={0} placeholder="users.id（须为 sales 角色）" />
           </Form.Item>
         </Form>
       </Modal>
