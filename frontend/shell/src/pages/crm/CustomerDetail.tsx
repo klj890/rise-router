@@ -84,6 +84,7 @@ export default function CustomerDetail() {
       setRechargeOpen(false)
       rechargeForm.resetFields()
       qc.invalidateQueries({ queryKey: ['crm-customer', orgId] })
+      qc.invalidateQueries({ queryKey: ['crm-customers'] }) // 列表余额随之刷新
     },
     onError: (e: { localizedMessage?: string }) => message.error(e.localizedMessage ?? '充值失败'),
   })
@@ -105,6 +106,7 @@ export default function CustomerDetail() {
       assignForm.resetFields()
       qc.invalidateQueries({ queryKey: ['crm-customer', orgId] })
       qc.invalidateQueries({ queryKey: ['crm-assignments', orgId] })
+      qc.invalidateQueries({ queryKey: ['crm-customers'] }) // 列表归属销售随之刷新
       message.success('已改派归属')
     },
     onError: (e: { localizedMessage?: string }) => message.error(e.localizedMessage ?? '改派失败'),

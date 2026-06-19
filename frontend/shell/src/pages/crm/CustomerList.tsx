@@ -168,7 +168,12 @@ export default function CustomerList() {
             onChange={(e) => setOwnerInput(e.target.value)}
             onPressEnter={applyFilter}
             allowClear
-            onClear={applyFilter}
+            onClear={() => {
+              // 不能复用 applyFilter：其读到的是清除前的旧 ownerInput 闭包值（异步 setState 未生效）。
+              setOwnerInput('')
+              setOwnerFilter(undefined)
+              setStack([])
+            }}
             style={{ width: 180 }}
             suffix={<SearchOutlined onClick={applyFilter} style={{ cursor: 'pointer' }} />}
           />
