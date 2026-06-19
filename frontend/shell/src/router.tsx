@@ -8,6 +8,8 @@ import CrudPage from './pages/admin/CrudPage'
 import { ADMIN_RESOURCES } from './pages/admin/resources'
 import PricePreviewPage from './pages/admin/PricePreview'
 import AdminTokenSettings from './pages/admin/AdminTokenSettings'
+import CustomerList from './pages/crm/CustomerList'
+import CustomerDetail from './pages/crm/CustomerDetail'
 import { useAuthStore } from './store/auth'
 
 function RequireAuth({ children }: { children: ReactNode }) {
@@ -28,6 +30,9 @@ export const router = createBrowserRouter([
     children: [
       { index: true, element: <Navigate to="/dashboard" replace /> },
       { path: 'dashboard', element: <DashboardPage /> },
+      // CRM 与销售控制台（M3 片D）
+      { path: 'crm', element: <CustomerList /> },
+      { path: 'crm/:orgId', element: <CustomerDetail /> },
       { path: 'settings/appearance', element: <AppearancePage /> },
       { path: 'settings/admin-token', element: <AdminTokenSettings /> },
       // 管理台 CRUD（按资源描述符动态挂载）+ 价格预览
