@@ -1,6 +1,8 @@
 # Rise Router 已实现功能与数据库设计（as-built）
 
-> 版本：v0.9 · 2026-06-18 · 本文记录**已落地的真实实现状态**（与设计蓝图 [data-model.md](./data-model.md)/[architecture.md](./architecture.md) 区分）。表结构取自运行库真实 schema。
+> 版本：v0.10 · 2026-06-19 · 本文记录**已落地的真实实现状态**（与设计蓝图 [data-model.md](./data-model.md)/[architecture.md](./architecture.md) 区分）。表结构取自运行库真实 schema。
+>
+> v0.10 增量（分支 `feat/m3-crm-slice-d`）：⑧ **M3 CRM 片D —— 前端 CRM 控制台（纯前端，零后端改动）**。对接片A/B 已落地端点：**客户列表页**（`/crm`，游标分页 + 按归属销售 id 过滤 + 「代客开户」弹窗）+ **客户详情页**（`/crm/:orgId`，钱包余额/授信/冻结卡片 + 「代客充值」「改派归属」弹窗 + Tabs 跟进记录/归属历史）。新增 `src/api/crm.ts`（类型化封装，Decimal 按字符串、枚举按变体名）+ `src/pages/crm/{CustomerList,CustomerDetail,labels}`。数据域隔离仍由后端 `require_scoped` 强制（前端无法绕过；越域 404）。归属销售/改派目标用 number 输入（无 users 列表端点，避免为 FK 下拉新建端点）。`tsc` + `vite build` 绿。详见 §16。
 >
 > v0.9 增量（分支 `feat/m4-report-slice-b`）：⑨ **M4 报表 片B —— 业绩/账单/运维数据集（零引擎改动）**。验证 片A 契约：仅加 source 注册 + seed，引擎/表零改。新增 1 个共享 source `orders`（账单+业绩复用：dims status/pay_channel/created_by_sales_id/org_id/day；mets order_count/order_amount/paid_amount(filter status=2 Paid)/paid_count/customer_count）+ 给 `usage` source 补 `p95_latency`(percentile_cont)/`stream_ratio`；新增 3 数据集 seed：`billing`（customer→org_id / finance·admin 全量）、`sales_perf`（sales→created_by_sales_id / finance·admin 全量，perm=report.dataset.crm）、`channel_health`（ops·admin only，不暴露 revenue，perm=report.dataset.ops）。smoke 扩至 **23/23**（含三新数据集 RLS + 列表权限过滤）。缺口：运维错误率/成本/任务队列待 片E 埋点。详见 §15.7。
 >
@@ -32,7 +34,8 @@
 | **用户登录** | 手机号 + 短信验证码注册/登录（mock 网关 + 60s 限流 + 5 次错码作废）→ JWT 会话；首登自动建 org-of-one；前端登录页接通 | `backend/crates/identity/src/session.rs`、`frontend/shell/src/pages/Login.tsx` | ✅ 本片 |
 | **RBAC** | roles/permissions/role_permissions/user_roles + `enforce` + 内置 seed + 引导首 admin；管理端点 `require(perm)`（superadmin 令牌逃生通道 + 用户角色）+ 角色授予 API | `backend/crates/rbac`、`backend/crates/identity/src/{guard,role_admin}.rs` | ✅ main |
 | **M3 CRM 片A** | 客户档案（org + 钱包余额 + 归属销售）+ 跟进记录 + 归属变更历史（事务改派 / 业绩归因轨迹）；新增 `require_scoped`→`Access` **端点层数据域隔离**（销售仅见自己名下） | `backend/crates/crm`、`backend/crates/identity/src/guard.rs`、`migration` | ✅ main |
-| **M4 报表 片A** | 策展数据集 + **RLS 行级隔离查询引擎**（source 白名单 + 按角色 `rls_rule` 绑定参数注入）+ `Principal` + report.* 权限点 + report_definitions CRUD；内置「用量」数据集端到端 | `backend/crates/report`、`backend/crates/identity/src/guard.rs`、`migration` | ✅ 本片 |
+| **M4 报表 片A** | 策展数据集 + **RLS 行级隔离查询引擎**（source 白名单 + 按角色 `rls_rule` 绑定参数注入）+ `Principal` + report.* 权限点 + report_definitions CRUD；内置「用量」数据集端到端 | `backend/crates/report`、`backend/crates/identity/src/guard.rs`、`migration` | ✅ main |
+| **M3 CRM 片D（前端）** | CRM 控制台：客户列表（游标分页 + 归属过滤 + 代客开户弹窗）+ 客户详情（钱包卡片 + 代客充值/改派弹窗 + 跟进/归属 Tabs）；零后端改动 | `frontend/shell/src/pages/crm/`、`frontend/shell/src/api/crm.ts` | ✅ 本片 |
 
 **MVP 端到端可计费回路已闭合且可视化运营**：建组织→建分组→配渠道/模型/路由→配价/折扣→发密钥（明文一次）→价格预览→调用（relay）→扣费→看流水——全程管理台操作，不需手写 SQL。用户经手机号+短信登录，管理端点按 RBAC 角色权限鉴权。
 
@@ -319,7 +322,7 @@ sequenceDiagram
 
 ## 11. 未实现 / 后续切片
 
-- **CRM 后续片（M3）**：~~片B 代客开户/充值~~（**已落地**，见 §14.5）；片C **业绩归因聚合**（按 `owner_sales_id` 聚合 `orders` 充值额 / `usage_logs` 消费额，周期过滤 + 下钻）；片D 前端 CRM 控制台。片A/B 数据域隔离走**端点层 `require_scoped`**（销售=本人名下边界）；完整 RLS 引擎（`user_roles.scope` 注入 + 报表四角色）仍留 M4。`organizations` 邮箱字段（per-org 客户账单邮件前置）仍待后续补。
+- **CRM 后续片（M3）**：~~片B 代客开户/充值~~（**已落地**，见 §14.5）；~~片D 前端 CRM 控制台~~（**已落地**，见 §16）；片C **业绩归因聚合**——按 `owner_sales_id` 聚合 `orders` 充值额 / `usage_logs` 消费额（周期过滤 + 下钻）；**注意**：M4 报表 `sales_perf` 数据集（§15.7）已用 RLS 引擎覆盖销售业绩查询，片C 若做须明确与之差异化（如 CRM 域内嵌业绩卡片），否则属重复建设——拍板前先评估是否仍需独立端点。片A/B 数据域隔离走**端点层 `require_scoped`**（销售=本人名下边界）；完整 RLS 引擎（`user_roles.scope` 注入 + 报表四角色）仍留 M4。`organizations` 邮箱字段（per-org 客户账单邮件前置）仍待后续补。
 - **RBAC 深化**：App 注册时声明权限点（apps 表/manifest，M5）；`user_roles.scope` 行级数据域（供报表 RLS）；superadmin 令牌逃生通道在 RBAC 完整运营后收紧/关闭；`seed_builtins` 目前仅插入不回收——将来从目录删除权限点时需补对账清理（当前只增不删，安全）。
 - **计费正确性（code-review 延后项）**：`prices.next_version` 读-改-写竞态，建议加 `(model,group,billing_unit,version)` 唯一约束（#6，低概率、需表达式索引处理 NULL group）。〔#4 分档单价被折扣污染已修：unit_prices 收紧为扁平数值映射，分档定价待专门结构。〕
 - **管理台增强**：非 org 维度可清空字段（api_key 预算/白名单、channel adapter_config、route priority/weight）的后端 null 清空仅 org 走 double_option；字段级 i18n（表单标签中文直出）。〔#7 前端 FK 选项 memo 陈旧已修。〕
@@ -438,3 +441,26 @@ sequenceDiagram
   - `channel_health`「渠道健康（运维）」source=usage，metrics 不含 revenue，rls `{ops:null, admin:null}`（customer/sales/finance 无分支=禁止），perm `report.dataset.ops`。
 - **验证**：`fmt`/`clippy -D warnings`/全 workspace 测试绿；smoke 扩至 **23/23**（`smoke_report.sh` 加 ops 用户 + orders 灌数，2099 时间窗隔离）：billing customer 仅本组织(order_count=2/paid=100) vs admin 全量(3/1099)、sales_perf sales 仅本人(paid=100/customer_count=1)、channel_health ops 全量(calls=3 + p95/stream 可算)、customer 查 sales_perf/channel_health 403、数据集列表按权限过滤（customer 见 usage/billing 不见 sales_perf/channel_health）。
 - **运维数据缺口（→ 片E 埋点补缺）**：`usage_logs` 无 http_status/error 列→错误率无法算；`cost_amount` 恒 NULL→渠道成本/毛利缺；`tasks` 队列未实现；渠道 `status` 在 channels 表需 JOIN（单表 source 暂不纳入）。本片运维数据集先覆盖 calls/latency/p95/stream by-channel。
+
+## 16. M3 CRM 片D：前端 CRM 控制台（v0.10 本片，纯前端）
+
+**零后端改动**——纯对接片A/B 已冻结的 CRM 端点（§9 CRM 段、§14）。验证后端契约可被前端无改造消费。
+
+### 16.1 页面与路由
+
+- **`/crm` 客户列表**（`pages/crm/CustomerList.tsx`）：表格列 id/名称/类型/状态/实名/归属销售/余额/授信；游标分页（栈式上一页/下一页，`limit=50`，命中满页才出「下一页」）；按归属销售 id 过滤（仅全量访问者生效，后端对受限销售强制本人名下并忽略此参数）；「代客开户」弹窗（手机号/组织名/类型/昵称/可选归属销售 id）。
+- **`/crm/:orgId` 客户详情**（`pages/crm/CustomerDetail.tsx`）：钱包卡片（余额/授信/冻结 Statistic + 类型/状态/实名/归属/分组 Descriptions）；「代客充值」弹窗（金额/支付渠道/备注 → 一步 Paid 入账，回显新余额 + 订单号）；「改派归属」弹窗（目标销售 id，需 `crm.assign`）；Tabs：跟进记录（倒序列表 + 顶部 TextArea 新增）、归属历史（active 标「生效中」/「历史」）。
+- 路由挂在 `router.tsx` 受保护区（`RequireAuth`）；菜单项 `/crm` 已存在（AppLayout），无改动。
+
+### 16.2 API 层（`src/api/crm.ts`）
+
+- 类型化封装全部 CRM 端点。两处契约要点（源自后端序列化行为，避免渲染错误）：
+  - **金额**（balance/credit_limit/frozen/amount）：rust_decimal 无 `serde-float` → 序列化为**字符串**（如 `"100.00000000"`）；前端 TS 标 `string`，展示用 `Number(v).toLocaleString`。
+  - **枚举**（org_type/status/realname_status/order status）：`DeriveActiveEnum` 的 num_value 只管 DB，serde 用**变体名字符串**（`"Enterprise"`/`"Active"`/…）；中文映射集中在 `pages/crm/labels.ts`，列表/详情复用。
+
+### 16.3 设计取舍（避免过度设计）
+
+- **数据域隔离不在前端做**：销售只见自己名下客户由后端 `require_scoped` 强制，前端无法也无需绕过（越域 GET 返回 404，不泄露存在性）。前端「按归属销售过滤」只是全量访问者的便利，受限销售传了也被后端忽略。
+- **归属销售 / 改派目标用 number 输入**（非 FK 下拉）：identity 域当前无 `GET /users` 列表端点；为一个下拉新建端点属过度设计，留待真有列表需求时统一加。
+- **认证走用户 JWT（Bearer）**：CRM 页面不像管理台 CRUD 那样硬性要求 `X-Admin-Token`；client 拦截器已同时附带 Bearer + 可选 admin token，故 sales 角色 JWT 或超管令牌均可用，数据域由后端按主体决定。
+- **验证**：`tsc` + `vite build` 绿；后端契约由 `smoke_crm.sh` 29/29 已坐实，前端按相同请求/响应形状对接。
