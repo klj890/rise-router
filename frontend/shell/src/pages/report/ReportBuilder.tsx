@@ -65,7 +65,8 @@ export default function ReportBuilder() {
   const [slug, setSlug] = useState<string | undefined>(undefined)
   const [metrics, setMetrics] = useState<string[]>([])
   const [dimensions, setDimensions] = useState<string[]>([])
-  const [range, setRange] = useState<[dayjs.Dayjs, dayjs.Dayjs] | null>(null)
+  // 元素可空：AntD RangePicker 清除单边时会产生 [dayjs,null]/[null,dayjs]；后端 query 支持单边时间窗。
+  const [range, setRange] = useState<[dayjs.Dayjs | null, dayjs.Dayjs | null] | null>(null)
   const [limit, setLimit] = useState<number>(LIMIT_DEFAULT)
   const [chartType, setChartType] = useState<ChartType>('table')
   const [result, setResult] = useState<QueryResp | null>(null)
@@ -146,7 +147,9 @@ export default function ReportBuilder() {
     setSlug(ds.slug)
     setMetrics(c.metrics ?? [])
     setDimensions(c.dimensions ?? [])
-    setRange(c.from && c.to ? [dayjs(c.from), dayjs(c.to)] : null)
+    setRange(
+      c.from || c.to ? [c.from ? dayjs(c.from) : null, c.to ? dayjs(c.to) : null] : null,
+    )
     setLimit(c.limit ?? LIMIT_DEFAULT)
     setChartType(c.chart_type ?? 'table')
     setResult(null)
@@ -258,7 +261,7 @@ export default function ReportBuilder() {
               <RangePicker
                 showTime
                 value={range}
-                onChange={(v) => setRange(v as [dayjs.Dayjs, dayjs.Dayjs] | null)}
+                onChange={(v) => setRange(v as [dayjs.Dayjs | null, dayjs.Dayjs | null] | null)}
               />
             </div>
             <div>
