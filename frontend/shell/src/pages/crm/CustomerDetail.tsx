@@ -75,7 +75,8 @@ export default function CustomerDetail() {
   const rechargeMutation = useMutation({
     mutationFn: (v: { amount: number; pay_channel?: string; memo?: string }) =>
       rechargeCustomer(orgId, {
-        amount: String(v.amount),
+        // 与表单 precision={2} 对齐：toFixed(2) 规范化为十进制串，避免浮点/科学计数法污染上送（后端 rust_decimal 解析）
+        amount: v.amount.toFixed(2),
         pay_channel: v.pay_channel?.trim() || undefined,
         memo: v.memo?.trim() || undefined,
       }),
@@ -246,7 +247,7 @@ export default function CustomerDetail() {
                 </Space.Compact>
                 {notesQuery.isError ? (
                   <Alert type="error" showIcon message="跟进记录加载失败" />
-                ) : (notesQuery.data?.length ?? 0) === 0 ? (
+                ) : (notesQuery.data?.length ?? 0) === 0 && !notesQuery.isLoading ? (
                   <Empty description="暂无跟进记录" />
                 ) : (
                   <List
