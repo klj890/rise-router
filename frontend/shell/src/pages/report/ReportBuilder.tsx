@@ -1,0 +1,474 @@
+import { useMemo, useState } from 'react'
+import {
+  Card,
+  Select,
+  Space,
+  Button,
+  DatePicker,
+  InputNumber,
+  Radio,
+  Table,
+  Tag,
+  Typography,
+  Alert,
+  Modal,
+  Form,
+  Input,
+  Drawer,
+  List,
+  Popconfirm,
+  Empty,
+  Spin,
+  message,
+} from 'antd'
+import {
+  BarChartOutlined,
+  SaveOutlined,
+  FolderOpenOutlined,
+  PlayCircleOutlined,
+} from '@ant-design/icons'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import type { ColumnsType } from 'antd/es/table'
+import dayjs from 'dayjs'
+import {
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+} from 'recharts'
+import {
+  listDatasets,
+  queryDataset,
+  listReports,
+  createReport,
+  deleteReport,
+  type Dataset,
+  type QueryResp,
+  type ChartType,
+  type ReportConfig,
+  type ReportDefinition,
+} from '../../api/report'
+
+const { RangePicker } = DatePicker
+// 极光主题取色：青绿主色 + 几个区分色，足够多系列时循环。
+const PALETTE = ['#2EE6C0', '#5B8DEF', '#F5A623', '#E0529C', '#9B6DFF', '#3FB950']
+const LIMIT_DEFAULT = 1000
+
+export default function ReportBuilder() {
+  const qc = useQueryClient()
+  const [slug, setSlug] = useState<string | undefined>(undefined)
+  const [metrics, setMetrics] = useState<string[]>([])
+  const [dimensions, setDimensions] = useState<string[]>([])
+  const [range, setRange] = useState<[dayjs.Dayjs, dayjs.Dayjs] | null>(null)
+  const [limit, setLimit] = useState<number>(LIMIT_DEFAULT)
+  const [chartType, setChartType] = useState<ChartType>('table')
+  const [result, setResult] = useState<QueryResp | null>(null)
+  const [saveOpen, setSaveOpen] = useState(false)
+  const [savedOpen, setSavedOpen] = useState(false)
+  const [saveForm] = Form.useForm<{ name: string; visibility: 'private' | 'role' | 'org' }>()
+
+  const datasetsQuery = useQuery({ queryKey: ['report-datasets'], queryFn: listDatasets })
+  const datasets = datasetsQuery.data ?? []
+  const dataset: Dataset | undefined = useMemo(
+    () => datasets.find((d) => d.slug === slug),
+    [datasets, slug],
+  )
+
+  const savedQuery = useQuery({
+    queryKey: ['report-reports'],
+    queryFn: listReports,
+    enabled: savedOpen,
+  })
+
+  const runMutation = useMutation({
+    mutationFn: () =>
+      queryDataset(slug!, {
+        metrics,
+        dimensions,
+        from: range?.[0]?.toISOString(),
+        to: range?.[1]?.toISOString(),
+        limit,
+      }),
+    onSuccess: (resp) => setResult(resp),
+    onError: (e: { localizedMessage?: string }) => message.error(e.localizedMessage ?? '查询失败'),
+  })
+
+  const saveMutation = useMutation({
+    mutationFn: (v: { name: string; visibility: 'private' | 'role' | 'org' }) => {
+      const config: ReportConfig = {
+        metrics,
+        dimensions,
+        from: range?.[0]?.toISOString(),
+        to: range?.[1]?.toISOString(),
+        limit,
+        chart_type: chartType,
+      }
+      return createReport({ dataset_slug: slug!, name: v.name.trim(), visibility: v.visibility, config })
+    },
+    onSuccess: () => {
+      message.success('报表已保存')
+      setSaveOpen(false)
+      saveForm.resetFields()
+      qc.invalidateQueries({ queryKey: ['report-reports'] })
+    },
+    onError: (e: { localizedMessage?: string }) => message.error(e.localizedMessage ?? '保存失败'),
+  })
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: number) => deleteReport(id),
+    onSuccess: () => {
+      message.success('已删除')
+      qc.invalidateQueries({ queryKey: ['report-reports'] })
+    },
+    onError: (e: { localizedMessage?: string }) => message.error(e.localizedMessage ?? '删除失败'),
+  })
+
+  const onSelectDataset = (s: string) => {
+    setSlug(s)
+    setMetrics([])
+    setDimensions([])
+    setResult(null)
+  }
+
+  const loadReport = (r: ReportDefinition) => {
+    const ds = datasets.find((d) => d.id === r.dataset_id)
+    if (!ds) {
+      message.error('报表所属数据集不可见或不存在')
+      return
+    }
+    const c = r.config
+    setSlug(ds.slug)
+    setMetrics(c.metrics ?? [])
+    setDimensions(c.dimensions ?? [])
+    setRange(c.from && c.to ? [dayjs(c.from), dayjs(c.to)] : null)
+    setLimit(c.limit ?? LIMIT_DEFAULT)
+    setChartType(c.chart_type ?? 'table')
+    setResult(null)
+    setSavedOpen(false)
+    message.info(`已载入报表「${r.name}」，点击「查询」运行`)
+  }
+
+  const canRun = !!slug && metrics.length > 0
+  const canChart = chartType !== 'table' && (result?.dimensions.length ?? 0) >= 1
+
+  const tableColumns: ColumnsType<Record<string, string | number | null>> = useMemo(() => {
+    if (!result) return []
+    const dimCols = result.dimensions.map((d) => ({
+      title: dataset?.dimensions.find((x) => x.key === d)?.label ?? d,
+      dataIndex: d,
+      key: d,
+      render: (v: unknown) => (v == null ? '—' : String(v)),
+    }))
+    const metCols = result.metrics.map((m) => ({
+      title: dataset?.metrics.find((x) => x.key === m)?.label ?? m,
+      dataIndex: m,
+      key: m,
+      align: 'right' as const,
+      render: (v: unknown) =>
+        v == null ? '—' : Number(v).toLocaleString('zh-CN', { maximumFractionDigits: 2 }),
+    }))
+    return [...dimCols, ...metCols]
+  }, [result, dataset])
+
+  return (
+    <div>
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          marginBottom: 16,
+        }}
+      >
+        <Typography.Title level={4} style={{ margin: 0 }}>
+          报表构建器
+        </Typography.Title>
+        <Space>
+          <Button icon={<FolderOpenOutlined />} onClick={() => setSavedOpen(true)}>
+            已存报表
+          </Button>
+          <Button
+            type="primary"
+            icon={<SaveOutlined />}
+            disabled={!result}
+            onClick={() => setSaveOpen(true)}
+          >
+            保存为报表
+          </Button>
+        </Space>
+      </div>
+
+      <Alert
+        type="info"
+        showIcon
+        style={{ marginBottom: 16 }}
+        message="策展数据集 + 行级隔离：只能基于管理员策展的数据集搭建报表，查询按你的角色强制行级过滤（如客户仅本组织、销售仅本人名下），不开放原始库。"
+      />
+
+      <Card style={{ marginBottom: 16 }}>
+        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+          <Space wrap size="middle" align="start">
+            <div>
+              <div style={{ marginBottom: 4, fontSize: 12, opacity: 0.7 }}>数据集</div>
+              <Select
+                style={{ width: 220 }}
+                placeholder="选择数据集"
+                loading={datasetsQuery.isLoading}
+                value={slug}
+                onChange={onSelectDataset}
+                options={datasets.map((d) => ({ value: d.slug, label: d.name }))}
+                showSearch
+                optionFilterProp="label"
+              />
+            </div>
+            <div>
+              <div style={{ marginBottom: 4, fontSize: 12, opacity: 0.7 }}>指标（必选）</div>
+              <Select
+                mode="multiple"
+                style={{ minWidth: 240 }}
+                placeholder="选择指标"
+                value={metrics}
+                onChange={setMetrics}
+                disabled={!dataset}
+                options={(dataset?.metrics ?? []).map((m) => ({ value: m.key, label: m.label }))}
+              />
+            </div>
+            <div>
+              <div style={{ marginBottom: 4, fontSize: 12, opacity: 0.7 }}>维度（可空=整体聚合）</div>
+              <Select
+                mode="multiple"
+                style={{ minWidth: 240 }}
+                placeholder="选择维度"
+                value={dimensions}
+                onChange={setDimensions}
+                disabled={!dataset}
+                options={(dataset?.dimensions ?? []).map((d) => ({ value: d.key, label: d.label }))}
+              />
+            </div>
+          </Space>
+          <Space wrap size="middle" align="start">
+            <div>
+              <div style={{ marginBottom: 4, fontSize: 12, opacity: 0.7 }}>时间窗（可选）</div>
+              <RangePicker
+                showTime
+                value={range}
+                onChange={(v) => setRange(v as [dayjs.Dayjs, dayjs.Dayjs] | null)}
+              />
+            </div>
+            <div>
+              <div style={{ marginBottom: 4, fontSize: 12, opacity: 0.7 }}>行数上限</div>
+              <InputNumber
+                min={1}
+                max={10000}
+                precision={0}
+                value={limit}
+                onChange={(v) => setLimit(v ?? LIMIT_DEFAULT)}
+              />
+            </div>
+            <div>
+              <div style={{ marginBottom: 4, fontSize: 12, opacity: 0.7 }}>展示</div>
+              <Radio.Group
+                value={chartType}
+                onChange={(e) => setChartType(e.target.value)}
+                optionType="button"
+                buttonStyle="solid"
+                options={[
+                  { value: 'table', label: '表格' },
+                  { value: 'bar', label: '柱状' },
+                  { value: 'line', label: '折线' },
+                ]}
+              />
+            </div>
+            <div style={{ alignSelf: 'flex-end' }}>
+              <Button
+                type="primary"
+                icon={<PlayCircleOutlined />}
+                disabled={!canRun}
+                loading={runMutation.isPending}
+                onClick={() => runMutation.mutate()}
+              >
+                查询
+              </Button>
+            </div>
+          </Space>
+        </Space>
+      </Card>
+
+      {result && (
+        <Card
+          title={
+            <Space>
+              <BarChartOutlined />
+              <span>结果</span>
+              <Tag>角色：{result.role}</Tag>
+              {result.rls_filtered ? (
+                <Tag color="orange">行级隔离生效</Tag>
+              ) : (
+                <Tag color="green">全量</Tag>
+              )}
+              <Typography.Text type="secondary">{result.rows.length} 行</Typography.Text>
+            </Space>
+          }
+        >
+          {result.rows.length === 0 ? (
+            <Empty description="无数据（检查时间窗与过滤条件）" />
+          ) : (
+            <>
+              {chartType !== 'table' && !canChart && (
+                <Alert
+                  type="warning"
+                  showIcon
+                  style={{ marginBottom: 16 }}
+                  message="图表需要至少一个维度作为 X 轴；当前为整体聚合，已退化为表格展示。"
+                />
+              )}
+              {canChart && (
+                <div style={{ width: '100%', height: 360, marginBottom: 16 }}>
+                  <ResponsiveContainer>
+                    {chartType === 'bar' ? (
+                      <BarChart data={result.rows}>
+                        <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
+                        <XAxis dataKey={result.dimensions[0]} />
+                        <YAxis />
+                        <Tooltip />
+                        <Legend />
+                        {result.metrics.map((m, i) => (
+                          <Bar
+                            key={m}
+                            dataKey={m}
+                            name={dataset?.metrics.find((x) => x.key === m)?.label ?? m}
+                            fill={PALETTE[i % PALETTE.length]}
+                          />
+                        ))}
+                      </BarChart>
+                    ) : (
+                      <LineChart data={result.rows}>
+                        <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
+                        <XAxis dataKey={result.dimensions[0]} />
+                        <YAxis />
+                        <Tooltip />
+                        <Legend />
+                        {result.metrics.map((m, i) => (
+                          <Line
+                            key={m}
+                            type="monotone"
+                            dataKey={m}
+                            name={dataset?.metrics.find((x) => x.key === m)?.label ?? m}
+                            stroke={PALETTE[i % PALETTE.length]}
+                            dot={false}
+                          />
+                        ))}
+                      </LineChart>
+                    )}
+                  </ResponsiveContainer>
+                </div>
+              )}
+              <Table
+                rowKey={(_, i) => String(i)}
+                columns={tableColumns}
+                dataSource={result.rows}
+                size="middle"
+                pagination={{ pageSize: 20, showSizeChanger: true }}
+                scroll={{ x: true }}
+              />
+            </>
+          )}
+        </Card>
+      )}
+
+      <Modal
+        title="保存为报表"
+        open={saveOpen}
+        onOk={async () => {
+          let v: { name: string; visibility: 'private' | 'role' | 'org' }
+          try {
+            v = await saveForm.validateFields()
+          } catch {
+            return
+          }
+          saveMutation.mutate(v)
+        }}
+        confirmLoading={saveMutation.isPending}
+        onCancel={() => setSaveOpen(false)}
+        destroyOnClose
+      >
+        <Form form={saveForm} layout="vertical" preserve={false} initialValues={{ visibility: 'private' }}>
+          <Form.Item
+            name="name"
+            label="报表名称"
+            rules={[
+              { required: true, message: '请填写报表名称' },
+              { whitespace: true, message: '名称不能全为空格' },
+            ]}
+          >
+            <Input placeholder="如：本月销售业绩" maxLength={128} />
+          </Form.Item>
+          <Form.Item name="visibility" label="可见性" extra="private 仅自己；role/org 对持 report.read 者可见（片A 简化）">
+            <Radio.Group
+              options={[
+                { value: 'private', label: '私有' },
+                { value: 'role', label: '按角色' },
+                { value: 'org', label: '按组织' },
+              ]}
+            />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Drawer
+        title="已存报表"
+        open={savedOpen}
+        onClose={() => setSavedOpen(false)}
+        width={420}
+      >
+        {savedQuery.isLoading ? (
+          <div style={{ textAlign: 'center', padding: 48 }}>
+            <Spin />
+          </div>
+        ) : (savedQuery.data?.length ?? 0) === 0 ? (
+          <Empty description="暂无已存报表" />
+        ) : (
+          <List
+            dataSource={savedQuery.data ?? []}
+            renderItem={(r) => (
+              <List.Item
+                key={r.id}
+                actions={[
+                  <Button key="load" type="link" onClick={() => loadReport(r)}>
+                    载入
+                  </Button>,
+                  <Popconfirm
+                    key="del"
+                    title="确认删除该报表？"
+                    onConfirm={() => deleteMutation.mutate(r.id)}
+                  >
+                    <Button type="link" danger>
+                      删除
+                    </Button>
+                  </Popconfirm>,
+                ]}
+              >
+                <List.Item.Meta
+                  title={r.name}
+                  description={
+                    <Space size="small">
+                      <Tag>{datasets.find((d) => d.id === r.dataset_id)?.name ?? `数据集 #${r.dataset_id}`}</Tag>
+                      <Tag>{r.config.chart_type}</Tag>
+                      <Typography.Text type="secondary">{r.visibility}</Typography.Text>
+                    </Space>
+                  }
+                />
+              </List.Item>
+            )}
+          />
+        )}
+      </Drawer>
+    </div>
+  )
+}

@@ -10,6 +10,7 @@ import PricePreviewPage from './pages/admin/PricePreview'
 import AdminTokenSettings from './pages/admin/AdminTokenSettings'
 import CustomerList from './pages/crm/CustomerList'
 import CustomerDetail from './pages/crm/CustomerDetail'
+import ReportBuilder from './pages/report/ReportBuilder'
 import { useAuthStore } from './store/auth'
 
 function RequireAuth({ children }: { children: ReactNode }) {
@@ -33,6 +34,8 @@ export const router = createBrowserRouter([
       // CRM 与销售控制台（M3 片D）
       { path: 'crm', element: <CustomerList /> },
       { path: 'crm/:orgId', element: <CustomerDetail /> },
+      // 监控报表构建器（M4 片C）
+      { path: 'report', element: <ReportBuilder /> },
       { path: 'settings/appearance', element: <AppearancePage /> },
       { path: 'settings/admin-token', element: <AdminTokenSettings /> },
       // 管理台 CRUD（按资源描述符动态挂载）+ 价格预览
