@@ -1,6 +1,8 @@
 # Rise Router 已实现功能与数据库设计（as-built）
 
-> 版本：v0.10 · 2026-06-19 · 本文记录**已落地的真实实现状态**（与设计蓝图 [data-model.md](./data-model.md)/[architecture.md](./architecture.md) 区分）。表结构取自运行库真实 schema。
+> 版本：v0.11 · 2026-06-19 · 本文记录**已落地的真实实现状态**（与设计蓝图 [data-model.md](./data-model.md)/[architecture.md](./architecture.md) 区分）。表结构取自运行库真实 schema。
+>
+> v0.11 增量（分支 `feat/m4-report-slice-c`）：⑨ **M4 报表 片C —— 前端报表构建器（纯前端，零后端改动）**。对接片A/B 已冻结的策展数据集 + RLS 查询 API：**报表构建器**（`/report`，选数据集 → 选指标/维度/时间窗/行数上限 → 查询 → recharts 柱/折线图 + AntD 表格双渲染 + RLS 角色徽标）+ **报表定义保存/加载/删除**（`已存报表` 抽屉，config 存 `report_definitions.config` jsonb）。新增依赖 **recharts ^2.15**（轻量，bundle gzip 515→633kB）+ `src/api/report.ts` + `src/pages/report/ReportBuilder.tsx`。RLS 行级隔离仍由后端引擎强制（前端无法绕过）。`tsc` + `vite build` 绿。详见 §17。
 >
 > v0.10 增量（分支 `feat/m3-crm-slice-d`）：⑧ **M3 CRM 片D —— 前端 CRM 控制台（纯前端，零后端改动）**。对接片A/B 已落地端点：**客户列表页**（`/crm`，游标分页 + 按归属销售 id 过滤 + 「代客开户」弹窗）+ **客户详情页**（`/crm/:orgId`，钱包余额/授信/冻结卡片 + 「代客充值」「改派归属」弹窗 + Tabs 跟进记录/归属历史）。新增 `src/api/crm.ts`（类型化封装，Decimal 按字符串、枚举按变体名）+ `src/pages/crm/{CustomerList,CustomerDetail,labels}`。数据域隔离仍由后端 `require_scoped` 强制（前端无法绕过；越域 404）。归属销售/改派目标用 number 输入（无 users 列表端点，避免为 FK 下拉新建端点）。`tsc` + `vite build` 绿。详见 §16。
 >
@@ -35,7 +37,8 @@
 | **RBAC** | roles/permissions/role_permissions/user_roles + `enforce` + 内置 seed + 引导首 admin；管理端点 `require(perm)`（superadmin 令牌逃生通道 + 用户角色）+ 角色授予 API | `backend/crates/rbac`、`backend/crates/identity/src/{guard,role_admin}.rs` | ✅ main |
 | **M3 CRM 片A** | 客户档案（org + 钱包余额 + 归属销售）+ 跟进记录 + 归属变更历史（事务改派 / 业绩归因轨迹）；新增 `require_scoped`→`Access` **端点层数据域隔离**（销售仅见自己名下） | `backend/crates/crm`、`backend/crates/identity/src/guard.rs`、`migration` | ✅ main |
 | **M4 报表 片A** | 策展数据集 + **RLS 行级隔离查询引擎**（source 白名单 + 按角色 `rls_rule` 绑定参数注入）+ `Principal` + report.* 权限点 + report_definitions CRUD；内置「用量」数据集端到端 | `backend/crates/report`、`backend/crates/identity/src/guard.rs`、`migration` | ✅ main |
-| **M3 CRM 片D（前端）** | CRM 控制台：客户列表（游标分页 + 归属过滤 + 代客开户弹窗）+ 客户详情（钱包卡片 + 代客充值/改派弹窗 + 跟进/归属 Tabs）；零后端改动 | `frontend/shell/src/pages/crm/`、`frontend/shell/src/api/crm.ts` | ✅ 本片 |
+| **M3 CRM 片D（前端）** | CRM 控制台：客户列表（游标分页 + 归属过滤 + 代客开户弹窗）+ 客户详情（钱包卡片 + 代客充值/改派弹窗 + 跟进/归属 Tabs）；零后端改动 | `frontend/shell/src/pages/crm/`、`frontend/shell/src/api/crm.ts` | ✅ main |
+| **M4 报表 片C（前端）** | 报表构建器：选数据集 → 指标/维度/时间窗 → 查询 → recharts 图表 + AntD 表格 + RLS 徽标 + 报表保存/加载/删除；零后端改动 | `frontend/shell/src/pages/report/`、`frontend/shell/src/api/report.ts` | ✅ 本片 |
 
 **MVP 端到端可计费回路已闭合且可视化运营**：建组织→建分组→配渠道/模型/路由→配价/折扣→发密钥（明文一次）→价格预览→调用（relay）→扣费→看流水——全程管理台操作，不需手写 SQL。用户经手机号+短信登录，管理端点按 RBAC 角色权限鉴权。
 
@@ -427,7 +430,7 @@ sequenceDiagram
 
 ### 15.6 片A 边界 / 后续
 
-- 片A 仅落「用量」数据集打通内核；**片B** 增业绩/账单/运维数据集（零引擎改动，仅加 source 注册 + seed），其中销售业绩需 `owner_sales_id` JOIN（用量按归属）。**片C** 前端报表构建器（依赖已冻结的 query API 契约）。**片D** 导出(xlsx/PDF)+订阅(邮件/webhook，复用 M2 cron)。**片E** 运维埋点补缺（`usage_logs.cost_amount` 毛利成本、错误率字段、任务队列）。
+- 片A 仅落「用量」数据集打通内核；**片B** 增业绩/账单/运维数据集（零引擎改动，仅加 source 注册 + seed），其中销售业绩需 `owner_sales_id` JOIN（用量按归属）。~~**片C** 前端报表构建器（依赖已冻结的 query API 契约）~~（**已落地**，见 §17）。**片D** 导出(xlsx/PDF)+订阅(邮件/webhook，复用 M2 cron)。**片E** 运维埋点补缺（`usage_logs.cost_amount` 毛利成本、错误率字段、任务队列）。
 
 ### 15.7 片B：业绩/账单/运维数据集（v0.9，零引擎改动）
 
@@ -464,3 +467,24 @@ sequenceDiagram
 - **归属销售 / 改派目标用 number 输入**（非 FK 下拉）：identity 域当前无 `GET /users` 列表端点；为一个下拉新建端点属过度设计，留待真有列表需求时统一加。
 - **认证走用户 JWT（Bearer）**：CRM 页面不像管理台 CRUD 那样硬性要求 `X-Admin-Token`；client 拦截器已同时附带 Bearer + 可选 admin token，故 sales 角色 JWT 或超管令牌均可用，数据域由后端按主体决定。
 - **验证**：`tsc` + `vite build` 绿；后端契约由 `smoke_crm.sh` 29/29 已坐实，前端按相同请求/响应形状对接。
+
+## 17. M4 报表 片C：前端报表构建器（v0.11 本片，纯前端）
+
+**零后端改动**——纯对接片A/B 已冻结的策展数据集 + RLS 查询 API（§15）。让 M4 报表端到端可用。
+
+### 17.1 页面与路由
+
+- **`/report` 报表构建器**（`pages/report/ReportBuilder.tsx`）：
+  - 选数据集（仅列出主体有权访问的，后端按 `required_permission` 过滤）→ 数据集详情提供可选 **指标/维度**（来自 `datasets.metrics/dimensions` jsonb）。
+  - 选指标（必选，多选）+ 维度（可空=整体聚合）+ 时间窗（RangePicker → from 含 / to 不含）+ 行数上限（≤10000）+ 展示方式（表格/柱状/折线）。
+  - 「查询」→ `POST /datasets/{slug}/query` → 结果区：**RLS 徽标**（`角色：x` + `行级隔离生效`/`全量`）+ recharts 图表（X 轴=首个维度，每指标一系列）+ AntD 表格（维度列 + 指标列，指标右对齐千分位）。
+  - 整体聚合（无维度）时图表退化为表格并提示（图表需至少一个维度作 X 轴）。
+- **报表保存/加载/删除**：「保存为报表」弹窗（名称 + 可见性 private/role/org）→ `POST /reports`，config 存 `{metrics,dimensions,from,to,limit,chart_type}`；「已存报表」抽屉 → `GET /reports` 列表，载入（按 `dataset_id` 反查可见数据集 slug 还原构建器状态，再点查询运行）/ 删除。
+- 路由挂 `router.tsx` 受保护区；菜单项 `/report` 已存在（AppLayout），无改动。
+
+### 17.2 设计取舍
+
+- **图表库选 recharts ^2.15**（React 原生、轻量、支持 React 19）而非 @ant-design/charts（AntV，重）：bundle gzip 515→633kB（+~118kB）。当前单 chunk 无分包是既有状况；**代码分包留待 bundle 成为实际痛点时统一处理**（避免提前优化）。
+- **RLS 不在前端做**：行级隔离由后端引擎按角色强制注入（缺角色分支=403、有分支=绑定参数过滤），前端仅展示 `rls_filtered` 状态，无法绕过。
+- **载入已存报表按 `dataset_id` 反查 slug**：`report_definitions` 存 dataset_id，构建器按 slug 工作；用已加载的可见数据集列表映射，数据集不可见时提示而非静默失败。
+- **验证**：`tsc` + `vite build` 绿；后端契约由 `smoke_report.sh`（23/23）已坐实，前端按 query API 形状（rows=维度字符串 + 指标数值）对接。
