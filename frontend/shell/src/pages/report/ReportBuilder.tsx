@@ -61,10 +61,13 @@ const PALETTE = ['#2EE6C0', '#5B8DEF', '#F5A623', '#E0529C', '#9B6DFF', '#3FB950
 const LIMIT_DEFAULT = 1000
 
 /** 图表 Tooltip 数值格式化：与表格千分位一致。 */
-const tooltipFmt = (value: unknown) =>
-  typeof value === 'number'
-    ? value.toLocaleString('zh-CN', { maximumFractionDigits: 2 })
-    : (value as string)
+const tooltipFmt = (value: unknown) => {
+  if (value == null) return '—'
+  const num = Number(value)
+  return Number.isNaN(num)
+    ? String(value)
+    : num.toLocaleString('zh-CN', { maximumFractionDigits: 2 })
+}
 
 export default function ReportBuilder() {
   const qc = useQueryClient()
@@ -180,8 +183,11 @@ export default function ReportBuilder() {
       dataIndex: m,
       key: m,
       align: 'right' as const,
-      render: (v: unknown) =>
-        v == null ? '—' : Number(v).toLocaleString('zh-CN', { maximumFractionDigits: 2 }),
+      render: (v: unknown) => {
+        if (v == null) return '—'
+        const num = Number(v)
+        return Number.isNaN(num) ? String(v) : num.toLocaleString('zh-CN', { maximumFractionDigits: 2 })
+      },
     }))
     return [...dimCols, ...metCols]
   }, [result, dataset])
@@ -220,6 +226,19 @@ export default function ReportBuilder() {
         style={{ marginBottom: 16 }}
         message="策展数据集 + 行级隔离：只能基于管理员策展的数据集搭建报表，查询按你的角色强制行级过滤（如客户仅本组织、销售仅本人名下），不开放原始库。"
       />
+
+      {datasetsQuery.isError && (
+        <Alert
+          type="error"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="加载数据集失败"
+          description={
+            (datasetsQuery.error as { localizedMessage?: string })?.localizedMessage ??
+            '请刷新页面重试'
+          }
+        />
+      )}
 
       <Card style={{ marginBottom: 16 }}>
         <Space direction="vertical" size="middle" style={{ width: '100%' }}>
@@ -286,6 +305,7 @@ export default function ReportBuilder() {
                 min={1}
                 max={10000}
                 precision={0}
+                placeholder={String(LIMIT_DEFAULT)}
                 value={limit ?? undefined}
                 onChange={(v) => {
                   setLimit(v)
@@ -489,6 +509,7 @@ export default function ReportBuilder() {
                       type="link"
                       danger
                       loading={deleteMutation.isPending && deleteMutation.variables === r.id}
+                      disabled={deleteMutation.isPending && deleteMutation.variables !== r.id}
                     >
                       删除
                     </Button>
