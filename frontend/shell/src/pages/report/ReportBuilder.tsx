@@ -60,6 +60,12 @@ const { RangePicker } = DatePicker
 const PALETTE = ['#2EE6C0', '#5B8DEF', '#F5A623', '#E0529C', '#9B6DFF', '#3FB950']
 const LIMIT_DEFAULT = 1000
 
+/** 图表 Tooltip 数值格式化：与表格千分位一致。 */
+const tooltipFmt = (value: unknown) =>
+  typeof value === 'number'
+    ? value.toLocaleString('zh-CN', { maximumFractionDigits: 2 })
+    : (value as string)
+
 export default function ReportBuilder() {
   const qc = useQueryClient()
   const [slug, setSlug] = useState<string | undefined>(undefined)
@@ -67,7 +73,8 @@ export default function ReportBuilder() {
   const [dimensions, setDimensions] = useState<string[]>([])
   // 元素可空：AntD RangePicker 清除单边时会产生 [dayjs,null]/[null,dayjs]；后端 query 支持单边时间窗。
   const [range, setRange] = useState<[dayjs.Dayjs | null, dayjs.Dayjs | null] | null>(null)
-  const [limit, setLimit] = useState<number>(LIMIT_DEFAULT)
+  // 允许为 null（可清空输入框重输）；查询/保存时用 ?? LIMIT_DEFAULT 兜底。
+  const [limit, setLimit] = useState<number | null>(LIMIT_DEFAULT)
   const [chartType, setChartType] = useState<ChartType>('table')
   const [result, setResult] = useState<QueryResp | null>(null)
   const [saveOpen, setSaveOpen] = useState(false)
@@ -94,7 +101,7 @@ export default function ReportBuilder() {
         dimensions,
         from: range?.[0]?.toISOString(),
         to: range?.[1]?.toISOString(),
-        limit,
+        limit: limit ?? LIMIT_DEFAULT,
       }),
     onSuccess: (resp) => setResult(resp),
     onError: (e: { localizedMessage?: string }) => message.error(e.localizedMessage ?? '查询失败'),
@@ -107,7 +114,7 @@ export default function ReportBuilder() {
         dimensions,
         from: range?.[0]?.toISOString(),
         to: range?.[1]?.toISOString(),
-        limit,
+        limit: limit ?? LIMIT_DEFAULT,
         chart_type: chartType,
       }
       return createReport({ dataset_slug: slug!, name: v.name.trim(), visibility: v.visibility, config })
@@ -237,7 +244,10 @@ export default function ReportBuilder() {
                 style={{ minWidth: 240 }}
                 placeholder="选择指标"
                 value={metrics}
-                onChange={setMetrics}
+                onChange={(v) => {
+                  setMetrics(v)
+                  setResult(null) // 参数变更 → 作废旧结果，强制重查后才能保存（避免保存配置与展示不一致）
+                }}
                 disabled={!dataset}
                 options={(dataset?.metrics ?? []).map((m) => ({ value: m.key, label: m.label }))}
               />
@@ -249,7 +259,10 @@ export default function ReportBuilder() {
                 style={{ minWidth: 240 }}
                 placeholder="选择维度"
                 value={dimensions}
-                onChange={setDimensions}
+                onChange={(v) => {
+                  setDimensions(v)
+                  setResult(null)
+                }}
                 disabled={!dataset}
                 options={(dataset?.dimensions ?? []).map((d) => ({ value: d.key, label: d.label }))}
               />
@@ -261,7 +274,10 @@ export default function ReportBuilder() {
               <RangePicker
                 showTime
                 value={range}
-                onChange={(v) => setRange(v as [dayjs.Dayjs | null, dayjs.Dayjs | null] | null)}
+                onChange={(v) => {
+                  setRange(v as [dayjs.Dayjs | null, dayjs.Dayjs | null] | null)
+                  setResult(null)
+                }}
               />
             </div>
             <div>
@@ -270,8 +286,11 @@ export default function ReportBuilder() {
                 min={1}
                 max={10000}
                 precision={0}
-                value={limit}
-                onChange={(v) => setLimit(v ?? LIMIT_DEFAULT)}
+                value={limit ?? undefined}
+                onChange={(v) => {
+                  setLimit(v)
+                  setResult(null)
+                }}
               />
             </div>
             <div>
@@ -333,13 +352,13 @@ export default function ReportBuilder() {
               )}
               {canChart && (
                 <div style={{ width: '100%', height: 360, marginBottom: 16 }}>
-                  <ResponsiveContainer>
+                  <ResponsiveContainer width="100%" height="100%">
                     {chartType === 'bar' ? (
                       <BarChart data={result.rows}>
                         <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
                         <XAxis dataKey={result.dimensions[0]} />
                         <YAxis />
-                        <Tooltip />
+                        <Tooltip formatter={tooltipFmt} />
                         <Legend />
                         {result.metrics.map((m, i) => (
                           <Bar
@@ -355,7 +374,7 @@ export default function ReportBuilder() {
                         <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
                         <XAxis dataKey={result.dimensions[0]} />
                         <YAxis />
-                        <Tooltip />
+                        <Tooltip formatter={tooltipFmt} />
                         <Legend />
                         {result.metrics.map((m, i) => (
                           <Line
@@ -434,6 +453,15 @@ export default function ReportBuilder() {
           <div style={{ textAlign: 'center', padding: 48 }}>
             <Spin />
           </div>
+        ) : savedQuery.isError ? (
+          <Alert
+            type="error"
+            showIcon
+            message="加载失败"
+            description={
+              (savedQuery.error as { localizedMessage?: string })?.localizedMessage ?? '请稍后重试'
+            }
+          />
         ) : (savedQuery.data?.length ?? 0) === 0 ? (
           <Empty description="暂无已存报表" />
         ) : (
@@ -443,15 +471,25 @@ export default function ReportBuilder() {
               <List.Item
                 key={r.id}
                 actions={[
-                  <Button key="load" type="link" onClick={() => loadReport(r)}>
+                  <Button
+                    key="load"
+                    type="link"
+                    disabled={deleteMutation.isPending}
+                    onClick={() => loadReport(r)}
+                  >
                     载入
                   </Button>,
                   <Popconfirm
                     key="del"
                     title="确认删除该报表？"
                     onConfirm={() => deleteMutation.mutate(r.id)}
+                    okButtonProps={{ loading: deleteMutation.isPending }}
                   >
-                    <Button type="link" danger>
+                    <Button
+                      type="link"
+                      danger
+                      loading={deleteMutation.isPending && deleteMutation.variables === r.id}
+                    >
                       删除
                     </Button>
                   </Popconfirm>,
