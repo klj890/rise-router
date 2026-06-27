@@ -23,15 +23,16 @@ use tokio::time::sleep;
 
 use rise_core::{AppError, AppResult, AppState};
 use rise_entity::channels;
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 
+use crate::adapter::{adapter_for, AdapterConfig, SseTranscoder};
 use crate::{resolve_route, weighted_failover_order};
 
 /// 转发给上游的客户端头白名单（小写）。排除 auth/host/content-* 等由本网关或 reqwest 接管的头。
 const FORWARD_HEADERS: [&str; 3] = ["openai-beta", "openai-organization", "openai-project"];
 
 /// 进程级共享 HTTP 客户端（连接池复用，避免每请求重建）。
-fn http_client() -> &'static reqwest::Client {
+pub(crate) fn http_client() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
         reqwest::Client::builder()
@@ -104,34 +105,51 @@ async fn chat_completions(
         let Some(channel) = channel_map.get(&cand.channel_id) else {
             continue;
         };
+        // 按协议族选适配器（白名单已在渠道 CRUD 拦截，未知值兜底跳过）
+        let Some(adapter) = adapter_for(&cand.protocol_adapter) else {
+            tracing::warn!(channel = %channel.name, adapter = %cand.protocol_adapter, "unknown protocol adapter, skip");
+            continue;
+        };
+        let cfg = AdapterConfig::new(channel.adapter_config.as_ref());
         let key = channel
             .credentials
             .get("key")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        // 模型映射到上游真实名
-        body["model"] = Value::String(cand.upstream_model_name.clone());
-        let url = format!(
-            "{}/chat/completions",
-            channel.base_url.trim_end_matches('/')
+
+        // 适配器构造上游 URL / 鉴权头 / 请求体（模型映射到上游真实名在 build_request_body 内完成）
+        let url = adapter.request_url(
+            &channel.base_url,
+            &cand.upstream_model_name,
+            is_stream,
+            &cfg,
         );
+        let up_body = adapter.build_request_body(&body, &cand.upstream_model_name, &cfg);
+        let auth = adapter.auth_headers(key, &cfg);
 
         let started = Instant::now();
         // 9. 发送（连接级瞬时错误带退避重试；5xx 不重试同一上游，直接转移）
-        match send_with_retry(client, &url, key, &body, &fwd).await {
+        match send_with_retry(client, &url, &auth, &up_body, &fwd).await {
             Ok(resp) => {
                 let status = resp.status();
                 if status.is_server_error() {
                     tracing::warn!(channel = %channel.name, %status, "upstream 5xx, failover");
                     continue;
                 }
-                // 流式成功：边转发边扫描 usage，流结束后结算（已开始吐字节，不再 failover）
+                // 流式成功：边转发边把上游 SSE 经转码器转成 OpenAI 形态、扫 usage，流结束后结算
                 if is_stream && status.is_success() {
-                    return Ok(stream_response(resp, state, ctx, model, cand.channel_id));
+                    let transcoder = adapter.stream_transcoder(&cfg);
+                    return Ok(stream_response(
+                        resp,
+                        state,
+                        ctx,
+                        model,
+                        cand.channel_id,
+                        transcoder,
+                    ));
                 }
-                // 非流式（或流式但 4xx 错误）：缓冲返回
                 let code = StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
-                let content_type = resp.headers().get(header::CONTENT_TYPE).cloned();
+                let upstream_ct = resp.headers().get(header::CONTENT_TYPE).cloned();
                 let bytes = match resp.bytes().await {
                     Ok(b) => b,
                     Err(e) => {
@@ -140,16 +158,49 @@ async fn chat_completions(
                     }
                 };
                 let latency_ms = started.elapsed().as_millis().try_into().ok();
-                // 仅非流式 2xx 在此结算（4xx 视为未消费用量，透传不扣费）
+
+                // 非流式 2xx：上游响应 → OpenAI 形态（None=已是 OpenAI，原始字节透传），据此结算
                 if status.is_success() && !is_stream {
-                    settle(&state, &ctx, &model, cand.channel_id, &bytes, latency_ms).await;
+                    return Ok(match serde_json::from_slice::<Value>(&bytes) {
+                        Ok(upstream_val) => {
+                            let converted = adapter.convert_response(&upstream_val, &cfg);
+                            let billing_val = converted.as_ref().unwrap_or(&upstream_val);
+                            settle(
+                                &state,
+                                &ctx,
+                                &model,
+                                cand.channel_id,
+                                billing_val,
+                                latency_ms,
+                            )
+                            .await;
+                            match converted {
+                                Some(v) => {
+                                    let out =
+                                        serde_json::to_vec(&v).unwrap_or_else(|_| bytes.to_vec());
+                                    (code, json_content_type(), out).into_response()
+                                }
+                                // OpenAI 兼容：原始字节零拷贝透传，字节级零回归
+                                None => {
+                                    (code, content_type_headers(upstream_ct), bytes).into_response()
+                                }
+                            }
+                        }
+                        // 上游 2xx 但非 JSON：原样透传，跳过计费（与历史行为一致）
+                        Err(_) => (code, content_type_headers(upstream_ct), bytes).into_response(),
+                    });
                 }
-                let mut out_headers = HeaderMap::new();
-                out_headers.insert(
-                    header::CONTENT_TYPE,
-                    content_type.unwrap_or_else(|| HeaderValue::from_static("application/json")),
-                );
-                return Ok((code, out_headers, bytes).into_response());
+
+                // 4xx：自动禁用判定（401/关键词且 auto_ban → 异步熔断），再归一错误返回
+                maybe_disable_channel(&state, channel, code.as_u16(), &bytes);
+                // 非 2xx（4xx）：错误体归一成 OpenAI 格式（None=原样透传，不扣费）
+                return Ok(match adapter.convert_error(code, &bytes, &cfg) {
+                    Some(v) => {
+                        let out = serde_json::to_vec(&v).unwrap_or_else(|_| bytes.to_vec());
+                        (code, json_content_type(), out).into_response()
+                    }
+                    None => (code, content_type_headers(upstream_ct), bytes).into_response(),
+                });
             }
             Err(e) => {
                 tracing::warn!(channel = %channel.name, error = %e, "upstream error, failover");
@@ -206,13 +257,70 @@ fn forward_headers(headers: &HeaderMap) -> Vec<(HeaderName, HeaderValue)> {
         .collect()
 }
 
+/// 上游 4xx 命中自动禁用条件（401/关键词且渠道 auto_ban）→ **异步**置 CircuitBroken
+/// （不阻塞响应；本就要把错误返回给客户端）。已熔断/连接失败/auto_ban 关闭则不动。
+fn maybe_disable_channel(state: &AppState, channel: &channels::Model, status: u16, body: &[u8]) {
+    if channel.status == channels::ChannelStatus::CircuitBroken {
+        return;
+    }
+    let body_str = String::from_utf8_lossy(body);
+    let check = crate::health::DisableCheck {
+        status,
+        body: &body_str,
+        auto_ban: channel.auto_ban,
+    };
+    let Some(reason) = crate::health::should_disable(&check) else {
+        return;
+    };
+    let Ok(db) = state.db() else {
+        return;
+    };
+    let db = db.clone();
+    let id = channel.id;
+    let name = channel.name.clone();
+    tokio::spawn(async move {
+        let am = channels::ActiveModel {
+            id: Set(id),
+            status: Set(channels::ChannelStatus::CircuitBroken),
+            disabled_reason: Set(Some(reason.clone())),
+            ..Default::default()
+        };
+        match am.update(&db).await {
+            Ok(_) => {
+                tracing::warn!(channel = %name, %reason, "channel auto-disabled (circuit broken)")
+            }
+            Err(e) => tracing::error!(channel = %name, error = %e, "auto-disable channel failed"),
+        }
+    });
+}
+
+/// `Content-Type: application/json` 响应头（adapter 转换后的 OpenAI 形态用）。
+fn json_content_type() -> HeaderMap {
+    let mut h = HeaderMap::new();
+    h.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    h
+}
+
+/// 透传上游 Content-Type（缺失回落 json）——OpenAI 兼容原始字节路径用。
+fn content_type_headers(upstream_ct: Option<HeaderValue>) -> HeaderMap {
+    let mut h = HeaderMap::new();
+    h.insert(
+        header::CONTENT_TYPE,
+        upstream_ct.unwrap_or_else(|| HeaderValue::from_static("application/json")),
+    );
+    h
+}
+
 /// 发送上游请求；**仅连接级**瞬时错误退避重试（最多 2 次尝试）。
 /// 不重试超时：POST 非幂等，读超时时上游可能已处理并计费，重试会致重复扣费/重复工具调用。
 /// 5xx 也不在此重试（交由调用方转移到下一渠道，避免重试同一报错上游）。
-async fn send_with_retry(
+pub(crate) async fn send_with_retry(
     client: &reqwest::Client,
     url: &str,
-    key: &str,
+    auth: &[(HeaderName, HeaderValue)],
     body: &Value,
     fwd: &[(HeaderName, HeaderValue)],
 ) -> reqwest::Result<reqwest::Response> {
@@ -220,8 +328,9 @@ async fn send_with_retry(
     let mut attempt = 0;
     loop {
         attempt += 1;
-        let mut req = client.post(url).bearer_auth(key).json(body);
-        for (k, v) in fwd {
+        // 鉴权由 adapter 注入（OpenAI=Bearer、Anthropic=x-api-key、…），不再硬编码 bearer_auth
+        let mut req = client.post(url).json(body);
+        for (k, v) in auth.iter().chain(fwd) {
             req = req.header(k, v);
         }
         match req.send().await {
@@ -295,7 +404,9 @@ fn stream_response(
     ctx: rise_identity::KeyContext,
     model: String,
     channel_id: i32,
+    mut transcoder: Box<dyn SseTranscoder + Send>,
 ) -> Response {
+    // 透传上游 content-type：三协议上游流式均为 text/event-stream，OpenAI 路径字节+头零回归。
     let content_type = resp.headers().get(header::CONTENT_TYPE).cloned();
     let body = Body::from_stream(async_stream::stream! {
         let shared = Arc::new(Mutex::new(ScanShared::default()));
@@ -314,7 +425,12 @@ fn stream_response(
         while let Some(item) = stream.next().await {
             match item {
                 Ok(bytes) => {
-                    scanner.feed(&bytes, &mut request_id);
+                    // 上游字节 → OpenAI SSE 字节（OpenAI 兼容为恒等透传，out==bytes 且 tail 空）
+                    let out = transcoder.push(&bytes);
+                    if out.is_empty() {
+                        continue; // 转码器尚未凑齐完整帧
+                    }
+                    scanner.feed(&out, &mut request_id);
                     // 边流边镜像到 shared，供 guard 在任意时刻 Drop 时读取
                     {
                         let mut s = shared.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -326,7 +442,7 @@ fn stream_response(
                             s.usage.clone_from(&scanner.usage);
                         }
                     }
-                    yield Ok::<_, std::io::Error>(bytes);
+                    yield Ok::<_, std::io::Error>(out);
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, "upstream stream error");
@@ -334,6 +450,21 @@ fn stream_response(
                     break;
                 }
             }
+        }
+        // 流正常结束：转码器补发收尾帧（末块 usage / data:[DONE]；OpenAI 兼容为空，不影响）
+        let tail = transcoder.finish();
+        if !tail.is_empty() {
+            scanner.feed(&tail, &mut request_id);
+            {
+                let mut s = shared.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                if s.request_id.is_none() {
+                    s.request_id.clone_from(&request_id);
+                }
+                if scanner.usage.is_some() {
+                    s.usage.clone_from(&scanner.usage);
+                }
+            }
+            yield Ok::<_, std::io::Error>(tail);
         }
     });
     let mut out = HeaderMap::new();
@@ -407,20 +538,17 @@ impl UsageScanner {
     }
 }
 
-/// 非流式结算：解析整段 JSON body → usage → 结算。
+/// 非流式结算：从已转成 OpenAI 形态的响应 Value 提取 usage → 结算。
+/// （调用方负责解析与协议转换；这里只认 OpenAI `usage` 字段，与 billing 契约一致。）
 async fn settle(
     state: &AppState,
     ctx: &rise_identity::KeyContext,
     model: &str,
     channel_id: i32,
-    body: &[u8],
+    parsed: &Value,
     latency_ms: Option<i32>,
 ) {
-    let Ok(parsed) = serde_json::from_slice::<Value>(body) else {
-        tracing::warn!(%model, "settle: upstream body not JSON, skip billing");
-        return;
-    };
-    let Some(quantity) = rise_billing::extract_token_usage(&parsed) else {
+    let Some(quantity) = rise_billing::extract_token_usage(parsed) else {
         tracing::debug!(%model, "settle: no usage in response, skip billing");
         return;
     };
