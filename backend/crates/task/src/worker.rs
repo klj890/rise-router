@@ -375,33 +375,37 @@ async fn finalize_succeeded(
     // ② 幂等结算：以 `rr-task-{id}` 为去重键，已结算过则跳过；否则结算并把该键落入流水
     //    （settle_chat 写 usage_logs.request_id）。settle 失败 `?` 上抛 → 重试，不漏扣。
     let req_id = format!("rr-task-{}", task.id);
-    let already_billed = usage_logs::Entity::find()
+    // 先查一次流水：已结算则直接复用其金额（重试/已结算路径只需这一次查询）；
+    // 未结算才 settle 并回读金额。回读的金额连同状态一起落任务行（供控制台显示 base/charged）。
+    let billed = match usage_logs::Entity::find()
         .filter(usage_logs::Column::RequestId.eq(&req_id))
         .one(db)
         .await?
-        .is_some();
-    if !already_billed {
-        let settlement = rise_billing::ChatSettlement {
-            org_id: task.org_id,
-            user_id: task.user_id,
-            api_key_id: task.api_key_id,
-            app_id: task.app_id,
-            group_id,
-            model_slug: &task.model_slug,
-            channel_id: task.channel_id.unwrap_or_default(),
-            quantity: usage.clone(),
-            latency_ms: None,
-            request_id: Some(req_id.clone()),
-            is_stream: false,
-        };
-        rise_billing::settle_chat(db, settlement, now).await?;
-    }
-    // 回读流水金额，连同状态一起落任务行（供控制台监控显示 base/charged）。
-    let billed = usage_logs::Entity::find()
-        .filter(usage_logs::Column::RequestId.eq(&req_id))
-        .one(db)
-        .await?;
-    let (base_amt, charged_amt) = billed.map(|l| (l.base_amount, l.charged_amount)).unzip();
+    {
+        Some(log) => log,
+        None => {
+            let settlement = rise_billing::ChatSettlement {
+                org_id: task.org_id,
+                user_id: task.user_id,
+                api_key_id: task.api_key_id,
+                app_id: task.app_id,
+                group_id,
+                model_slug: &task.model_slug,
+                channel_id: task.channel_id.unwrap_or_default(),
+                quantity: usage.clone(),
+                latency_ms: None,
+                request_id: Some(req_id.clone()),
+                is_stream: false,
+            };
+            rise_billing::settle_chat(db, settlement, now).await?;
+            usage_logs::Entity::find()
+                .filter(usage_logs::Column::RequestId.eq(&req_id))
+                .one(db)
+                .await?
+                .ok_or_else(|| AppError::Internal("结算流水回读为空".into()))?
+        }
+    };
+    let (base_amt, charged_amt) = (billed.base_amount, billed.charged_amount);
 
     // ③ 原子抢占 Running→Succeeded（防与 cancel 竞态）。已结算后才翻；被取消则 0 行
     //    （工作已完成且已结算，视为可接受的罕见竞态）。
