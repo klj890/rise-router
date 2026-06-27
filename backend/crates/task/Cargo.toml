@@ -23,3 +23,4 @@ object_store.workspace = true
 bytes.workspace = true
 async-trait.workspace = true
 rand.workspace = true
+futures-util.workspace = true

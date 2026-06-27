@@ -2741,6 +2741,7 @@ dependencies = [
  "bytes",
  "chrono",
  "deadpool-redis",
+ "futures-util",
  "object_store",
  "rand 0.8.6",
  "reqwest",

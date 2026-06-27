@@ -96,11 +96,25 @@ async fn worker_loop(state: AppState, idx: usize) {
     loop {
         match next_queued(&state).await {
             Ok(Some(id)) => {
-                if let Err(e) = process_submit(&state, &http, id).await {
-                    tracing::error!(task_id = id, error = %e, "process_submit failed");
-                    let _ = set_failed(&state, id, &format!("submit error: {e}")).await;
+                // 仅当任务已进入稳定 DB 态（Running/Failed）才从 processing 移除；
+                // 若提交失败且置 Failed 也失败（DB 抖动），任务仍 Queued → 保留在 processing，
+                // 由 recovery_sweep 重新入队，避免「队列/processing 都没有」的永久卡死。
+                let settled = match process_submit(&state, &http, id).await {
+                    Ok(()) => true,
+                    Err(e) => {
+                        tracing::error!(task_id = id, error = %e, "process_submit failed");
+                        match set_failed(&state, id, &format!("submit error: {e}")).await {
+                            Ok(()) => true,
+                            Err(se) => {
+                                tracing::error!(task_id = id, error = %se, "set_failed failed; leave in processing for sweep");
+                                false
+                            }
+                        }
+                    }
+                };
+                if settled {
+                    let _ = lrem_processing(&state, id).await;
                 }
-                let _ = lrem_processing(&state, id).await;
             }
             Ok(None) => {} // BRPOPLPUSH 超时（无任务）→ 继续阻塞
             Err(e) => {
@@ -328,9 +342,11 @@ async fn finalize_succeeded(
         .map(|m| m.billing_unit)
         .unwrap_or_else(|| "call".into());
     let usage = compute_usage(&billing_unit, &task.input);
+    // group 解析放在原子翻转**前**：DB 抖动失败时任务保持 Running 可被下轮重试（不会漏扣）。
+    let group_id = group_id_from_slug(db, task.group_slug.as_deref()).await?;
 
-    // 先落产物 + 结算，再翻 Succeeded —— 保证「客户端看到 succeeded 时产物已就绪」。
-    // 落产物到对象存储（best-effort，错误记日志不阻断）。
+    // 顺序：①落产物（Running 时，幂等）→ ②原子抢占 Running→Succeeded → ③仅抢占成功才结算。
+    // 同时满足两不变式：succeeded ⇒ 产物已就绪（①在②前）；cancelled ⇒ 不计费（③在②后）。
     let bucket = state.config.s3.bucket.clone();
     for (n, art) in produced.into_iter().enumerate() {
         if let Err(e) = store_artifact(state, task.id, n, art, &bucket).await {
@@ -338,8 +354,30 @@ async fn finalize_succeeded(
         }
     }
 
-    // 计费结算（复用 chat 通用结算；失败仅告警，不翻状态——at-least-serve）。
-    let group_id = group_id_from_slug(db, task.group_slug.as_deref()).await?;
+    // ② 原子抢占 Running→Succeeded（防与 cancel 竞态）。
+    let res = tasks::Entity::update_many()
+        .filter(tasks::Column::Id.eq(task.id))
+        .filter(tasks::Column::Status.eq(tasks::TaskStatus::Running))
+        .col_expr(
+            tasks::Column::Status,
+            Expr::value(tasks::TaskStatus::Succeeded),
+        )
+        .col_expr(tasks::Column::Usage, Expr::value(usage.clone()))
+        .col_expr(tasks::Column::FinishedAt, Expr::value(now))
+        .col_expr(tasks::Column::UpdatedAt, Expr::value(now))
+        .exec(db)
+        .await?;
+    if res.rows_affected == 0 {
+        // 已被取消：不计费（产物已落但孤立于 cancelled 任务，可接受）。
+        tracing::info!(
+            task_id = task.id,
+            "task cancelled before finalize; not billed"
+        );
+        return Ok(());
+    }
+
+    // ③ 计费结算（已抢占 Succeeded，不会被 cancel 竞争 → 不会误扣已取消任务）。
+    //   失败仅告警不翻状态（at-least-serve）。
     let settlement = rise_billing::ChatSettlement {
         org_id: task.org_id,
         user_id: task.user_id,
@@ -348,35 +386,13 @@ async fn finalize_succeeded(
         group_id,
         model_slug: &task.model_slug,
         channel_id: task.channel_id.unwrap_or_default(),
-        quantity: usage.clone(),
+        quantity: usage,
         latency_ms: None,
         request_id: task.request_id.clone(),
         is_stream: false,
     };
     if let Err(e) = rise_billing::settle_chat(db, settlement, now).await {
         tracing::error!(task_id = task.id, error = %e, "task settle failed; served unbilled");
-    }
-
-    // 原子抢占 Running→Succeeded（防与 cancel 竞态）。被取消则 0 行——产物/结算已落（罕见竞态，
-    // 视为「工作已完成」可接受；片C 再以事务收紧）。
-    let res = tasks::Entity::update_many()
-        .filter(tasks::Column::Id.eq(task.id))
-        .filter(tasks::Column::Status.eq(tasks::TaskStatus::Running))
-        .col_expr(
-            tasks::Column::Status,
-            Expr::value(tasks::TaskStatus::Succeeded),
-        )
-        .col_expr(tasks::Column::Usage, Expr::value(usage))
-        .col_expr(tasks::Column::FinishedAt, Expr::value(now))
-        .col_expr(tasks::Column::UpdatedAt, Expr::value(now))
-        .exec(db)
-        .await?;
-    if res.rows_affected == 0 {
-        tracing::info!(
-            task_id = task.id,
-            "task not running at finalize (cancelled?); artifacts/charge already applied"
-        );
-        return Ok(());
     }
 
     maybe_webhook(state, task, "succeeded", None);
@@ -506,8 +522,9 @@ async fn store_artifact(
                 // 非 2xx（404/500…）也会 Ok：显式拦截，避免把错误页当产物存。
                 .error_for_status()
                 .map_err(|e| AppError::Internal(format!("download artifact status: {e}")))?;
-            // OOM 防护：按 Content-Length 预拦 + 读取后复核大小上限。
-            // 大文件的正解是流式 put_multipart 到对象存储（不全量入内存），留待片C。
+            // OOM 防护：先按 Content-Length 预拦；再**分块累计**读取，边读边查上限——
+            // 兼顾 chunked（无 Content-Length）与恶意无限流，超限即中止。
+            // 注：超大文件的终极正解是流式 put_multipart 直管到对象存储（不入内存），留待后续。
             if let Some(len) = resp.content_length() {
                 if len > MAX_ARTIFACT_BYTES {
                     return Err(AppError::Internal(format!(
@@ -515,18 +532,19 @@ async fn store_artifact(
                     )));
                 }
             }
-            let bytes = resp
-                .bytes()
-                .await
-                .map_err(|e| AppError::Internal(format!("read artifact: {e}")))?
-                .to_vec();
-            if bytes.len() as u64 > MAX_ARTIFACT_BYTES {
-                return Err(AppError::Internal(format!(
-                    "artifact too large: {} bytes (max {MAX_ARTIFACT_BYTES})",
-                    bytes.len()
-                )));
+            use futures_util::StreamExt;
+            let mut stream = resp.bytes_stream();
+            let mut data: Vec<u8> = Vec::new();
+            while let Some(chunk) = stream.next().await {
+                let chunk = chunk.map_err(|e| AppError::Internal(format!("read artifact: {e}")))?;
+                if data.len() as u64 + chunk.len() as u64 > MAX_ARTIFACT_BYTES {
+                    return Err(AppError::Internal(format!(
+                        "artifact exceeds max {MAX_ARTIFACT_BYTES} bytes; aborted"
+                    )));
+                }
+                data.extend_from_slice(&chunk);
             }
-            (bytes, content_type, meta)
+            (data, content_type, meta)
         }
     };
 
@@ -631,12 +649,17 @@ async fn webhook_url_allowed(url: &str) -> bool {
 fn is_blocked_ip(ip: std::net::IpAddr) -> bool {
     match ip {
         std::net::IpAddr::V4(v4) => {
-            v4.is_private()
+            let o = v4.octets();
+            v4.is_private() // 10/8, 172.16/12, 192.168/16
                 || v4.is_loopback()
                 || v4.is_link_local() // 169.254/16，含云元数据 169.254.169.254
                 || v4.is_unspecified()
                 || v4.is_broadcast()
-                || v4.octets()[0] == 0
+                || o[0] == 0 // 0.0.0.0/8 当前网络
+                || (o[0] == 100 && (o[1] & 0xc0) == 64) // CGNAT 100.64/10（k8s/Tailscale 常见）
+                || (o[0] == 198 && (o[1] & 0xfe) == 18) // 基准测试 198.18/15
+                || (o[0] == 192 && o[1] == 0 && o[2] == 0) // IETF 协议分配 192.0.0/24
+                || o[0] >= 240 // 240/4 保留 + 255.255.255.255
         }
         std::net::IpAddr::V6(v6) => {
             v6.is_loopback()
@@ -647,6 +670,41 @@ fn is_blocked_ip(ip: std::net::IpAddr) -> bool {
             // IPv4-mapped
         }
     }
+}
+
+/// 后台尽力取消上游任务（凭 vendor_task_id）——闭合「提交后取消导致厂商侧泄漏」。
+/// 供 cancel 端点在取消一个 Running 任务时调用。无 vendor_task_id/渠道则跳过。
+pub(crate) fn spawn_upstream_cancel(state: AppState, task: tasks::Model) {
+    let (Some(vendor_task_id), Some(channel_id)) = (task.vendor_task_id.clone(), task.channel_id)
+    else {
+        return;
+    };
+    tokio::spawn(async move {
+        let Ok(db) = state.db() else { return };
+        let Ok(Some(channel)) = channels::Entity::find_by_id(channel_id).one(db).await else {
+            return;
+        };
+        let Some(adapter) = adapter_for(&channel.protocol_adapter) else {
+            return;
+        };
+        let http = http_client();
+        let key = channel_key(&channel);
+        let ctx = PollCtx {
+            http: &http,
+            base_url: &channel.base_url,
+            key: &key,
+            vendor_task_id: &vendor_task_id,
+            poll_count: task.poll_count,
+        };
+        match adapter.cancel(&ctx).await {
+            Ok(()) => {
+                tracing::info!(task_id = task.id, vendor_task_id = %vendor_task_id, "upstream task cancelled")
+            }
+            Err(e) => {
+                tracing::warn!(task_id = task.id, vendor_task_id = %vendor_task_id, error = %e, "upstream cancel failed; may leak")
+            }
+        }
+    });
 }
 
 /// 若任务配了 webhook 则后台投递（无 url 直接跳过）。
