@@ -22,26 +22,30 @@ const WORKER_CONCURRENCY: usize = 4;
 const POLL_INTERVAL_SECS: u64 = 5;
 const POLL_MAX: i32 = 120; // 超过则判超时失败（≈ POLL_MAX × 间隔）
 
-/// 启动任务运行时：恢复 sweep（一次）+ N 个 worker + 1 个 poller。
+/// 启动任务运行时：先顺序跑恢复 sweep，再起 N 个 worker；poller 独立起。
+///
+/// sweep 必须在 worker 之前跑完——否则 worker 刚 BRPOPLPUSH 到 processing（DB 仍 Queued、
+/// 未及置 Running）时，并发的 sweep 会把它误判为积压重新入队 → 重复消费。
 pub fn spawn_task_runtime(state: AppState) {
     {
-        let st = state.clone();
+        let state = state.clone();
         tokio::spawn(async move {
-            if let Err(e) = recovery_sweep(&st).await {
+            if let Err(e) = recovery_sweep(&state).await {
                 tracing::warn!(error = %e, "task recovery sweep failed");
             }
+            for i in 0..WORKER_CONCURRENCY {
+                let st = state.clone();
+                tokio::spawn(async move { worker_loop(st, i).await });
+            }
+            tracing::info!(
+                workers = WORKER_CONCURRENCY,
+                "task workers started after sweep"
+            );
         });
-    }
-    for i in 0..WORKER_CONCURRENCY {
-        let st = state.clone();
-        tokio::spawn(async move { worker_loop(st, i).await });
     }
     let st = state.clone();
     tokio::spawn(async move { poller_loop(st).await });
-    tracing::info!(
-        workers = WORKER_CONCURRENCY,
-        "task runtime started (worker + poller)"
-    );
+    tracing::info!("task runtime starting (sweep → workers; poller live)");
 }
 
 /// 共享 HTTP 客户端（适配器外呼用）。
@@ -169,11 +173,16 @@ async fn poller_loop(state: AppState) {
         tokio::time::sleep(Duration::from_secs(POLL_INTERVAL_SECS)).await;
         match running_tasks(&state).await {
             Ok(list) => {
+                // 并发轮询：单个慢/超时上游不阻塞整轮（每任务独立 spawn）。
                 for task in list {
-                    let tid = task.id;
-                    if let Err(e) = process_poll(&state, &http, task).await {
-                        tracing::error!(task_id = tid, error = %e, "process_poll failed");
-                    }
+                    let st = state.clone();
+                    let cl = http.clone();
+                    tokio::spawn(async move {
+                        let tid = task.id;
+                        if let Err(e) = process_poll(&st, &cl, task).await {
+                            tracing::error!(task_id = tid, error = %e, "process_poll failed");
+                        }
+                    });
                 }
             }
             Err(e) => tracing::warn!(error = %e, "load running tasks failed"),
@@ -312,7 +321,7 @@ async fn finalize_succeeded(
         return Ok(());
     }
 
-    fire_webhook(state, task, "succeeded", None).await;
+    maybe_webhook(state, task, "succeeded", None);
     Ok(())
 }
 
@@ -332,7 +341,7 @@ async fn finalize_failed(state: &AppState, task: &tasks::Model, message: &str) -
         .exec(db)
         .await?;
     if res.rows_affected == 1 {
-        fire_webhook(state, task, "failed", Some(message)).await;
+        maybe_webhook(state, task, "failed", Some(message.to_string()));
     }
     Ok(())
 }
@@ -344,19 +353,21 @@ async fn resolve_route(
     db: &DatabaseConnection,
     model_id: i32,
 ) -> AppResult<(channels::Model, String)> {
-    let mc = model_channels::Entity::find()
+    // 按优先级遍历所有启用路由线，返回首个「渠道亦启用」的——支持故障转移到次优渠道。
+    let mcs = model_channels::Entity::find()
         .filter(model_channels::Column::ModelId.eq(model_id))
         .filter(model_channels::Column::Enabled.eq(true))
         .order_by_desc(model_channels::Column::Priority)
-        .one(db)
-        .await?
-        .ok_or(AppError::Unavailable)?;
-    let channel = channels::Entity::find_by_id(mc.channel_id)
-        .one(db)
-        .await?
-        .filter(|c| c.status == channels::ChannelStatus::Enabled)
-        .ok_or(AppError::Unavailable)?;
-    Ok((channel, mc.upstream_model_name))
+        .all(db)
+        .await?;
+    for mc in mcs {
+        if let Some(channel) = channels::Entity::find_by_id(mc.channel_id).one(db).await? {
+            if channel.status == channels::ChannelStatus::Enabled {
+                return Ok((channel, mc.upstream_model_name));
+            }
+        }
+    }
+    Err(AppError::Unavailable)
 }
 
 /// 渠道凭据 key（`credentials.key`；缺省空串，mock 适配器忽略）。
@@ -403,6 +414,18 @@ async fn store_artifact(
     let db = state.db()?;
     let store = state.store()?;
 
+    // 幂等：poller 重试（如状态翻转前瞬时故障）不重复落产物/上传。
+    let key = format!("tasks/{task_id}/{n}");
+    if artifacts::Entity::find()
+        .filter(artifacts::Column::TaskId.eq(task_id))
+        .filter(artifacts::Column::S3Key.eq(&key))
+        .one(db)
+        .await?
+        .is_some()
+    {
+        return Ok(());
+    }
+
     let (data, content_type, meta) = match art {
         ProducedArtifact::Bytes {
             bytes,
@@ -415,7 +438,10 @@ async fn store_artifact(
             meta,
         } => {
             // 下载上游产物后转存（私有化：客户只经 presigned 访问我方对象存储）。
-            let resp = reqwest::get(&url)
+            // 用带超时的 http_client，避免挂起的上游下载耗尽 worker。
+            let resp = http_client()
+                .get(&url)
+                .send()
                 .await
                 .map_err(|e| AppError::Internal(format!("download artifact: {e}")))?;
             let bytes = resp
@@ -428,7 +454,6 @@ async fn store_artifact(
     };
 
     let size = data.len() as i64;
-    let key = format!("tasks/{task_id}/{n}");
     store
         .put(
             &Path::from(key.clone()),
@@ -451,34 +476,58 @@ async fn store_artifact(
     Ok(())
 }
 
-/// 回调 webhook（best-effort，更新 webhook_state）。
-async fn fire_webhook(state: &AppState, task: &tasks::Model, status: &str, error: Option<&str>) {
-    let Some(url) = task.webhook_url.clone() else {
-        return;
-    };
-    let payload = json!({
-        "id": task.id,
-        "type": task.task_type,
-        "status": status,
-        "error": error,
+/// 回调 webhook（非阻塞：spawn 后台投递，慢/挂起的客户端 webhook 不拖垮运行时）。
+fn fire_webhook(
+    state: AppState,
+    task_id: i64,
+    task_type: String,
+    url: String,
+    status: &'static str,
+    error: Option<String>,
+) {
+    tokio::spawn(async move {
+        let payload = json!({
+            "id": task_id,
+            "type": task_type,
+            "status": status,
+            "error": error,
+        });
+        let delivered = http_client()
+            .post(&url)
+            .json(&payload)
+            .send()
+            .await
+            .map(|r| r.status().is_success())
+            .unwrap_or(false);
+        if let Ok(db) = state.db() {
+            let _ = tasks::Entity::update_many()
+                .filter(tasks::Column::Id.eq(task_id))
+                .col_expr(
+                    tasks::Column::WebhookState,
+                    Expr::value(if delivered { "delivered" } else { "failed" }),
+                )
+                .exec(db)
+                .await;
+        }
     });
-    let http = http_client();
-    let delivered = http
-        .post(&url)
-        .json(&payload)
-        .send()
-        .await
-        .map(|r| r.status().is_success())
-        .unwrap_or(false);
-    if let Ok(db) = state.db() {
-        let _ = tasks::Entity::update_many()
-            .filter(tasks::Column::Id.eq(task.id))
-            .col_expr(
-                tasks::Column::WebhookState,
-                Expr::value(if delivered { "delivered" } else { "failed" }),
-            )
-            .exec(db)
-            .await;
+}
+
+/// 若任务配了 webhook 则后台投递（无 url 直接跳过）。
+fn maybe_webhook(
+    state: &AppState,
+    task: &tasks::Model,
+    status: &'static str,
+    error: Option<String>,
+) {
+    if let Some(url) = task.webhook_url.clone() {
+        fire_webhook(
+            state.clone(),
+            task.id,
+            task.task_type.clone(),
+            url,
+            status,
+            error,
+        );
     }
 }
 
@@ -501,11 +550,15 @@ async fn recovery_sweep(state: &AppState) -> AppResult<()> {
 
     let mut requeued = 0;
     for id in ids {
-        let still_queued = tasks::Entity::find_by_id(id)
-            .one(db)
-            .await?
-            .map(|t| t.status == tasks::TaskStatus::Queued)
-            .unwrap_or(false);
+        // 单任务查询失败不中断整个 sweep（否则后续任务永久滞留 processing）。
+        let still_queued = match tasks::Entity::find_by_id(id).one(db).await {
+            Ok(Some(t)) => t.status == tasks::TaskStatus::Queued,
+            Ok(None) => false,
+            Err(e) => {
+                tracing::error!(task_id = id, error = %e, "sweep: query task failed; skip");
+                continue;
+            }
+        };
         if still_queued {
             let _: i64 = deadpool_redis::redis::cmd("LPUSH")
                 .arg(QUEUE_KEY)
