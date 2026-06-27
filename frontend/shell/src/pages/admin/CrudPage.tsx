@@ -309,7 +309,8 @@ export default function CrudPage({ resource, title }: { resource: ResourceDef; t
       items.push({
         key: String(o.value),
         label: o.label,
-        count: allRows.filter((r) => r[statusField.name] === o.value).length,
+        // 与行过滤的 String 归一比较保持一致（兼容布尔/数字型状态字段，避免计数与过滤结果不符）。
+        count: allRows.filter((r) => String(r[statusField.name] ?? '') === String(o.value)).length,
       })
     }
     return items
