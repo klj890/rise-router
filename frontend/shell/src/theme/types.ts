@@ -1,6 +1,6 @@
 export type ThemeMode = 'dark' | 'light' | 'system'
 export type ResolvedMode = 'dark' | 'light'
-export type AccentId = 'aurora' | 'violet' | 'amber' | 'blue'
+export type AccentId = 'indigo' | 'aurora' | 'violet' | 'amber' | 'blue'
 
 /** per-租户白标覆盖；任一字段缺省则回落到预设值。 */
 export interface BrandOverride {

@@ -17,7 +17,7 @@ export const useThemeStore = create<ThemeState>()(
   persist(
     (set) => ({
       mode: 'dark', // 暗色优先
-      accentId: 'aurora',
+      accentId: 'indigo', // 设计稿默认主色：靛蓝紫
       brand: {},
       setMode: (mode) => set({ mode }),
       setAccent: (accentId) => set({ accentId }),

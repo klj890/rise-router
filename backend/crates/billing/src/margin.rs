@@ -79,7 +79,9 @@ pub struct MarginResp {
 }
 
 /// `YYYY-MM` → [当月首日, 次月首日) 的 UTC 半开区间。
-fn parse_period(period: &str) -> AppResult<(DateTimeWithTimeZone, DateTimeWithTimeZone)> {
+pub(crate) fn parse_period(
+    period: &str,
+) -> AppResult<(DateTimeWithTimeZone, DateTimeWithTimeZone)> {
     let mut it = period.split('-');
     let (Some(ys), Some(ms), None) = (it.next(), it.next(), it.next()) else {
         return Err(AppError::BadRequest("period must be YYYY-MM".into()));
@@ -102,6 +104,21 @@ fn parse_period(period: &str) -> AppResult<(DateTimeWithTimeZone, DateTimeWithTi
     let (ny, nm) = if m == 12 { (y + 1, 1) } else { (y, m + 1) };
     let end = mk(ny, nm)?;
     Ok((start.fixed_offset(), end.fixed_offset()))
+}
+
+/// 解析周期参数为 (半开区间, 规范化周期串)；`None` 取当月（UTC）。供 margin 与 admin_read 复用。
+pub(crate) fn period_range(
+    period: Option<String>,
+) -> AppResult<((DateTimeWithTimeZone, DateTimeWithTimeZone), String)> {
+    let period = match period {
+        Some(p) => p,
+        None => {
+            let now = Utc::now();
+            format!("{:04}-{:02}", now.year(), now.month())
+        }
+    };
+    let range = parse_period(&period)?;
+    Ok((range, period))
 }
 
 /// 由聚合原始数值装配一个对外单元格（算毛利与毛利率）。
@@ -136,7 +153,7 @@ pub async fn margin(
     headers: HeaderMap,
     Query(q): Query<MarginQuery>,
 ) -> AppResult<Json<MarginResp>> {
-    rise_identity::require(&state, &headers, "billing.manage").await?;
+    rise_identity::require(&state, &headers, "billing.read").await?;
     let db = state.db()?;
     Ok(Json(compute_margin(db, q.period, q.group_by).await?))
 }

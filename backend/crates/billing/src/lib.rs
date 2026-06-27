@@ -4,6 +4,7 @@
 //! [`wallet`] 提供余额预检 + 充值入账 + 消费扣减（settle 复用）。
 //! 「看流水/看余额」端点按密钥 org 隔离（RLS 雏形），走 Bearer 鉴权。
 
+mod admin_read;
 mod charge;
 mod email;
 mod email_cron;
@@ -36,6 +37,10 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/margin", get(margin::margin))
         .route("/margin/export", get(export::export_margin))
+        // 财务控制台跨租户只读视图（billing.read）：账单总览页消费
+        .route("/admin/tenants", get(admin_read::tenants))
+        .route("/admin/orders", get(admin_read::orders))
+        .route("/admin/invoices", get(admin_read::invoices))
         .route("/email/test", post(email_cron::email_test))
         .route("/_ping", get(|| async { "billing ok" }))
         .route("/usage", get(usage))
