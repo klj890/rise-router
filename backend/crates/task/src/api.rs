@@ -68,11 +68,13 @@ pub async fn submit(
     let ctx = auth(&state, &headers).await?;
     let db = state.db()?;
 
-    if req.r#type.trim().is_empty() {
+    // 归一化：trim 后既用于校验也用于落库，避免「校验用 trim、落库用原值」导致脏数据。
+    let task_type = req.r#type.trim().to_string();
+    if task_type.is_empty() {
         return Err(AppError::BadRequest("type is required".into()));
     }
-    // 与迁移 tasks.type varchar(48) 对齐：超长直接 400，而非交由 DB 报 500。
-    if req.r#type.len() > 48 {
+    // 与迁移 tasks.type varchar(48) 对齐：按字符数（非字节）校验，超长直接 400 而非 DB 500。
+    if task_type.chars().count() > 48 {
         return Err(AppError::BadRequest(
             "type is too long (max 48 characters)".into(),
         ));
@@ -109,7 +111,7 @@ pub async fn submit(
         org_id: Set(ctx.org_id),
         api_key_id: Set(ctx.api_key_id),
         user_id: Set(ctx.user_id),
-        task_type: Set(req.r#type.clone()),
+        task_type: Set(task_type),
         model_id: Set(model.id),
         model_slug: Set(req.model.clone()),
         group_slug: Set(group_slug),
