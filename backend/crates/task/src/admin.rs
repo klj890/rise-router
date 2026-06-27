@@ -106,6 +106,15 @@ pub async fn cancel(
         .await?
         .ok_or(AppError::NotFound)?;
 
+    // 未发生转换且当前非 Cancelled（已 Succeeded/Failed，或与 poller 竞态抢先终结）→
+    // 返回 400，避免前端误报「已取消」后刷新又见「成功」的不一致。重复取消（已是 Cancelled）幂等放行。
+    if res.rows_affected == 0 && latest.status != tasks::TaskStatus::Cancelled {
+        return Err(AppError::BadRequest(format!(
+            "任务当前状态为 {:?}，无法取消",
+            latest.status
+        )));
+    }
+
     // 真正发生取消转换且已提交上游 → 后台尽力取消上游，闭合泄漏。
     if res.rows_affected == 1 && latest.vendor_task_id.is_some() {
         crate::worker::spawn_upstream_cancel(state.clone(), latest.clone());
