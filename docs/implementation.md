@@ -1,6 +1,8 @@
 # Rise Router 已实现功能与数据库设计（as-built）
 
-> 版本：v0.11 · 2026-06-19 · 本文记录**已落地的真实实现状态**（与设计蓝图 [data-model.md](./data-model.md)/[architecture.md](./architecture.md) 区分）。表结构取自运行库真实 schema。
+> 版本：v0.12 · 2026-06-27 · 本文记录**已落地的真实实现状态**（与设计蓝图 [data-model.md](./data-model.md)/[architecture.md](./architecture.md) 区分）。表结构取自运行库真实 schema。
+>
+> v0.12 增量（分支 `feat/gateway-protocol-adapters`）：① **协议族适配器层** —— relay 转发从硬编码 OpenAI 形态抽象为 `ProtocolAdapter` trait（`gateway/src/adapter/`），按 `channel.protocol_adapter` 分派。同步 object-safe trait（转换纯 CPU，网络 I/O 留编排层）+ 有状态 `SseTranscoder`（move 进流生成器，规避 async-trait 对象安全问题）。落地三协议：**OpenAI 兼容**（纯透传，`convert_response`/`convert_error`=None + `PassthroughTranscoder`，字节级零回归可证）、**Anthropic**（`/v1/messages`、x-api-key、system 抽顶层、max_tokens 兜底、tools/tool_use、image block、SSE 命名事件状态机、usage 跨 message_start+message_delta 累积）、**Gemini**（模型名在 path、x-goog-api-key、contents[]、functionDeclarations、不发 `[DONE]` 由 finish() 补）。三协议均含 tools/function calling + 多模态 image + 上游错误体归一 `convert_error`。`KNOWN_PROTOCOL_ADAPTERS` 扩为三族。② **渠道健康管理** —— `POST /channels/{id}/test`（五层判定漏斗：发送成功/200/可解析/无 error 字段/有内容，挡"200 但 body 是错误"和"200 空响应"两坑，复用同一套 adapter → 测试通过=真实可转发）+ 测速写回；relay 4xx 命中 401/关键词且 `auto_ban` → 异步熔断 `CircuitBroken`；定时探活 + 被动恢复（`RR_CHANNEL_HEALTH_*`，默认关，单实例假设）。channels 新增 `response_time/test_time/test_model/auto_ban/disabled_reason`（迁移 `m20260613_000028`）。gateway 单测 57 个全过。详见 §6（网关路由 + relay 转发）。
 >
 > v0.11 增量（分支 `feat/m4-report-slice-c`）：⑨ **M4 报表 片C —— 前端报表构建器（纯前端，零后端改动）**。对接片A/B 已冻结的策展数据集 + RLS 查询 API：**报表构建器**（`/report`，选数据集 → 选指标/维度/时间窗/行数上限 → 查询 → recharts 柱/折线图 + AntD 表格双渲染 + RLS 角色徽标）+ **报表定义保存/加载/删除**（`已存报表` 抽屉，config 存 `report_definitions.config` jsonb）。新增依赖 **recharts ^2.15**（轻量，bundle gzip 515→633kB）+ `src/api/report.ts` + `src/pages/report/ReportBuilder.tsx`。RLS 行级隔离仍由后端引擎强制（前端无法绕过）。`tsc` + `vite build` 绿。详见 §17。
 >
@@ -28,7 +30,9 @@
 | **定价核心** | 五要素解耦：models/prices/discounts + `resolve_price()`（slug 版）/`resolve_price_by_group_id()`（热路径）+ 价格预览 | `backend/crates/{entity,pricing}` | ✅ main |
 | **身份与密钥** | organizations + 虚拟密钥 api_keys + `verify_key()`（单 JOIN 鉴权）+ `bearer_token()` + `whoami` | `backend/crates/identity` | ✅ main |
 | **网关与路由** | channels + model_channels + `resolve_route()`（路由线）+ `rank_routes`/加权随机序 + `/route` 预览 | `backend/crates/gateway` | ✅ main |
-| **relay 转发** | OpenAI 兼容 `/v1/chat/completions`：鉴权→白名单→路由→失败转移→转发；**流式 SSE + 重试退避 + 转发头** | `backend/crates/gateway/src/relay.rs` | ✅ main(非流式) / 🔶 PR(流式) |
+| **relay 转发** | OpenAI 兼容 `/v1/chat/completions`：鉴权→白名单→路由→失败转移→转发；**流式 SSE + 重试退避 + 转发头** | `backend/crates/gateway/src/relay.rs` | ✅ main |
+| **协议族适配器** | `ProtocolAdapter` trait + 三族（openai_compatible/anthropic/gemini）：请求/响应/SSE/错误双向转换 + tools + 多模态 image；按 `channel.protocol_adapter` 分派 | `backend/crates/gateway/src/adapter/` | ✅ PR |
+| **渠道健康管理** | `POST /channels/{id}/test`（五层判定漏斗 + 测速写回）+ relay 4xx 自动熔断（401/关键词×auto_ban）+ 定时探活/被动恢复 | `backend/crates/gateway/src/{channel,health}.rs` | ✅ PR |
 | **计费结算** | 同步后扣：`charge`（算费纯函数）+ `settle_chat`（事务：流水+扣预算）+ usage_logs + `/usage` 游标分页 | `backend/crates/billing` | ✅ main |
 | **M2 财务** | 钱包（余额/授信/冻结）+ 充值入账 + 充值订单（mock 支付/幂等）+ 应收侧对账（周期聚合 + draft/locked 封账）| `backend/crates/billing` | ✅ main |
 | **管理台 CRUD** | 五要素 + 路由 + 身份共 8 实体的增删改查（admin 守卫）：channels/models/model_channels/groups/prices/discounts/organizations/api_keys | `backend/crates/{gateway,pricing,identity}` | ✅ 本片 |
