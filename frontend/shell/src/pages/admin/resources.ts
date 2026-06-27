@@ -4,6 +4,7 @@ import {
   loadChannelOptions,
   loadGroupOptions,
   loadOrgOptions,
+  testChannel,
 } from '../../api/admin'
 
 // —— 枚举选项（value 用后端 serde 变体名 / 词表值）——
@@ -14,7 +15,7 @@ const MODEL_STATUS = [opt('Listed', '上架'), opt('Delisted', '下架')]
 const MODALITY = ['chat', 'embedding', 'image', 'video', 'audio', 'rerank'].map((v) => opt(v))
 const INVOCATION = [opt('sync_stream', '同步流 sync_stream'), opt('async_task', '异步任务 async_task')]
 const BILLING_UNIT = ['token', 'image', 'second', 'call'].map((v) => opt(v))
-const PROTOCOL = [opt('openai_compatible')]
+const PROTOCOL = [opt('openai_compatible'), opt('anthropic'), opt('gemini')]
 // org 暂不开放：解析器尚不处理 org 维度折扣（详见后端 discount.rs KNOWN_SCOPES）
 const SCOPE = ['global', 'model', 'group', 'model_group'].map((v) => opt(v))
 const KIND = [opt('percentage', '按比例 percentage'), opt('fixed', '减额 fixed')]
@@ -35,11 +36,18 @@ const channels: ResourceDef = {
     { name: 'base_url', label: '上游地址', type: 'text', required: true, inTable: true, placeholder: 'https://...' },
     { name: 'credentials', label: '凭据(JSON)', type: 'json', placeholder: '{"key":"sk-..."}', help: '密钥配置；列表不回显' },
     { name: 'has_credentials', label: '已配密钥', type: 'switch', inTable: true, inCreate: false, inEdit: false },
-    { name: 'adapter_config', label: '适配器配置(JSON)', type: 'json' },
+    { name: 'adapter_config', label: '适配器配置(JSON)', type: 'json', help: 'anthropic: {"anthropic_version","default_max_tokens"}；gemini: {"path_template"}；openai 可留空' },
     { name: 'priority', label: '优先级', type: 'number', inTable: true },
     { name: 'weight', label: '权重', type: 'number', inTable: true },
     { name: 'status', label: '状态', type: 'select', options: CHANNEL_STATUS, inTable: true },
+    // 健康管理
+    { name: 'test_model', label: '测试模型', type: 'text', help: '渠道测试默认上游模型；留空取首条路由' },
+    { name: 'auto_ban', label: '允许自动禁用', type: 'switch', inTable: true, help: '失败/超时时是否自动熔断（留空默认开）' },
+    { name: 'response_time', label: '测速(ms)', type: 'number', inTable: true, inCreate: false, inEdit: false },
+    { name: 'test_time', label: '最近测试', type: 'datetime', inTable: true, inCreate: false, inEdit: false },
+    { name: 'disabled_reason', label: '熔断原因', type: 'text', inTable: true, inCreate: false, inEdit: false },
   ],
+  rowActions: [{ label: '测试', run: testChannel }],
 }
 
 const models: ResourceDef = {

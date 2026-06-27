@@ -14,6 +14,7 @@ import {
   Alert,
   message,
   DatePicker,
+  Tag,
 } from 'antd'
 import { PlusOutlined, ReloadOutlined } from '@ant-design/icons'
 import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query'
@@ -53,11 +54,19 @@ export interface FieldDef {
   placeholder?: string
 }
 
+/** 行级自定义操作（如渠道连通性测试）：调 `run(id)`，结果弹窗展示并刷新列表。 */
+export interface RowActionDef {
+  label: string
+  run: (id: number) => Promise<unknown>
+}
+
 export interface ResourceDef {
   base: string
   fields: FieldDef[]
   /** 创建响应里携带的一次性密钥（如 api key 明文） */
   secret?: { field: string; entityField: string; label: string }
+  /** 操作列附加的行级动作 */
+  rowActions?: RowActionDef[]
 }
 
 type Row = Record<string, unknown>
@@ -109,6 +118,36 @@ function renderCell(f: FieldDef, value: unknown, optionMap: Map<string | number,
   return String(value)
 }
 
+/** 行级动作结果展示：对含 ok 的结果（如渠道测试）友好渲染，否则退化为 JSON。 */
+function ActionResult({ result }: { result: unknown }) {
+  const r = (result ?? {}) as Record<string, unknown>
+  if (typeof r.ok === 'boolean') {
+    return (
+      <div>
+        <Space style={{ marginBottom: 8 }}>
+          <Tag color={r.ok ? 'success' : 'error'}>{r.ok ? '连通正常' : '连通失败'}</Tag>
+          <Typography.Text type="secondary">
+            状态 {String(r.status)} · 耗时 {String(r.latency_ms)}ms · 模型 {String(r.model)}
+          </Typography.Text>
+        </Space>
+        {r.error ? (
+          <Alert type="error" showIcon message={String(r.error)} style={{ marginBottom: 8 }} />
+        ) : null}
+        {r.usage != null ? (
+          <Typography.Paragraph code style={{ marginBottom: 0 }}>
+            usage: {JSON.stringify(r.usage)}
+          </Typography.Paragraph>
+        ) : null}
+      </div>
+    )
+  }
+  return (
+    <pre style={{ maxHeight: 300, overflow: 'auto', margin: 0 }}>
+      {JSON.stringify(result, null, 2)}
+    </pre>
+  )
+}
+
 export default function CrudPage({ resource, title }: { resource: ResourceDef; title: string }) {
   const qc = useQueryClient()
   const adminToken = useAuthStore((s) => s.adminToken)
@@ -116,6 +155,7 @@ export default function CrudPage({ resource, title }: { resource: ResourceDef; t
   const [open, setOpen] = useState(false)
   const [editingId, setEditingId] = useState<number | null>(null)
   const [secretValue, setSecretValue] = useState<string | null>(null)
+  const [actionModal, setActionModal] = useState<{ title: string; result: unknown } | null>(null)
 
   const listQuery = useQuery({
     queryKey: ['admin', resource.base],
@@ -181,6 +221,16 @@ export default function CrudPage({ resource, title }: { resource: ResourceDef; t
     onError: (e: { localizedMessage?: string }) => message.error(e.localizedMessage ?? '删除失败'),
   })
 
+  const actionMutation = useMutation({
+    mutationFn: ({ action, id }: { action: RowActionDef; id: number }) => action.run(id),
+    onSuccess: (result, { action }) => {
+      // 行级动作可能改变记录（如渠道测试写回测速/触发熔断）→ 刷新列表
+      qc.invalidateQueries({ queryKey: ['admin', resource.base] })
+      setActionModal({ title: action.label, result })
+    },
+    onError: (e: { localizedMessage?: string }) => message.error(e.localizedMessage ?? '操作失败'),
+  })
+
   const openCreate = () => {
     setEditingId(null)
     form.resetFields()
@@ -234,9 +284,19 @@ export default function CrudPage({ resource, title }: { resource: ResourceDef; t
     {
       title: '操作',
       key: '__actions',
-      width: 160,
+      width: 160 + (resource.rowActions?.length ?? 0) * 60,
       render: (_: unknown, record: Row) => (
         <Space>
+          {(resource.rowActions ?? []).map((a) => (
+            <Button
+              key={a.label}
+              size="small"
+              loading={actionMutation.isPending}
+              onClick={() => actionMutation.mutate({ action: a, id: record.id as number })}
+            >
+              {a.label}
+            </Button>
+          ))}
           <Button size="small" onClick={() => openEdit(record)}>
             编辑
           </Button>
@@ -370,6 +430,17 @@ export default function CrudPage({ resource, title }: { resource: ResourceDef; t
         <Typography.Paragraph copyable code style={{ wordBreak: 'break-all' }}>
           {secretValue}
         </Typography.Paragraph>
+      </Modal>
+
+      <Modal
+        title={actionModal?.title ?? '结果'}
+        open={actionModal != null}
+        onOk={() => setActionModal(null)}
+        onCancel={() => setActionModal(null)}
+        cancelButtonProps={{ style: { display: 'none' } }}
+        width={560}
+      >
+        {actionModal && <ActionResult result={actionModal.result} />}
       </Modal>
     </div>
   )

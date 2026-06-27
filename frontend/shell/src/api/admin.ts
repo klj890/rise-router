@@ -23,6 +23,18 @@ export const loadChannelOptions = () => optionsFrom('/api/gateway/channels', 'na
 export const loadGroupOptions = () => optionsFrom('/api/pricing/groups', 'slug')
 export const loadOrgOptions = () => optionsFrom('/api/identity/organizations', 'name')
 
+/** 渠道连通性测试：真打上游一次，返回 {ok,status,latency_ms,model,error?,usage?}。 */
+export interface ChannelTestResult {
+  ok: boolean
+  status: number
+  latency_ms: number
+  model: string
+  error?: string
+  usage?: unknown
+}
+export const testChannel = (id: number): Promise<ChannelTestResult> =>
+  api.post<ChannelTestResult>(`/api/gateway/channels/${id}/test`, {}).then((r) => r.data)
+
 export interface PricePreview {
   model_id: number
   model_slug: string
