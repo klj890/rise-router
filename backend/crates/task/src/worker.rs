@@ -23,6 +23,9 @@ const POLL_INTERVAL_SECS: u64 = 5;
 const POLL_MAX: i32 = 120; // 超过则判超时失败（≈ POLL_MAX × 间隔）
 /// 单个产物下载入内存上限（OOM 防护；超大文件正解是流式转存，留待片C）。
 const MAX_ARTIFACT_BYTES: u64 = 256 * 1024 * 1024;
+/// 下载缓冲预分配上限：按 Content-Length 预分配但封顶此值，
+/// 防恶意上游声明超大 Content-Length 却不发数据 → 预占内存 DoS。
+const PREALLOC_CAP: u64 = 1024 * 1024;
 
 /// 启动任务运行时：先顺序跑恢复 sweep，再起 N 个 worker；poller 独立起。
 ///
@@ -549,10 +552,11 @@ async fn store_artifact(
             }
             use futures_util::StreamExt;
             let mut stream = resp.bytes_stream();
-            // 已知 Content-Length 时按其预分配（封顶 MAX，防恶意大 Content-Length 预占内存），
-            // 省去分块累计时的反复扩容拷贝。
+            // 已知 Content-Length 时按其预分配，但封顶 PREALLOC_CAP（1MB）——
+            // 防恶意上游声明超大 Content-Length 却不发数据导致的预占内存 DoS；
+            // 超出部分由 Vec 动态扩容承接。
             let cap = declared
-                .map(|l| core::cmp::min(l, MAX_ARTIFACT_BYTES) as usize)
+                .map(|l| core::cmp::min(l, PREALLOC_CAP) as usize)
                 .unwrap_or(0);
             let mut data: Vec<u8> = Vec::with_capacity(cap);
             while let Some(chunk) = stream.next().await {
