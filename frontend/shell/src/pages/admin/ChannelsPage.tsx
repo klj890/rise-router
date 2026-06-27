@@ -176,11 +176,11 @@ export default function ChannelsPage() {
             <thead>
               <tr>
                 <th style={{ textAlign: 'left' }}>渠道</th>
-                <th>适配器</th>
+                <th style={{ textAlign: 'left' }}>适配器</th>
                 <th style={{ textAlign: 'right' }}>权重</th>
                 <th style={{ textAlign: 'right' }}>优先级</th>
                 <th style={{ textAlign: 'right' }}>测速</th>
-                <th>密钥</th>
+                <th style={{ textAlign: 'left' }}>密钥</th>
                 <th style={{ textAlign: 'right' }}>状态</th>
               </tr>
             </thead>

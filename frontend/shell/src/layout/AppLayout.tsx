@@ -112,7 +112,7 @@ export default function AppLayout() {
   const isActive = (key: string) =>
     location.pathname === key || location.pathname.startsWith(key + '/')
 
-  const initial = (username ?? 'U').trim().charAt(0).toUpperCase()
+  const initial = (username?.trim() || 'U').charAt(0).toUpperCase()
 
   const orgMenu = useMemo(
     () => ({

@@ -197,7 +197,7 @@ export default function CustomerList() {
       />
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 16 }}>
-        <KpiCard label="客户总数" value={rows.length || '342'} accent hint="本月新签 26" />
+        <KpiCard label="客户总数" value={listQuery.isLoading ? '…' : rows.length} accent hint="本月新签 26" />
         <KpiCard label="本月销售额" value="¥1.28M" hint="环比 +18.2%" hintTone="positive" />
         <KpiCard label="客单价" value="¥3,742" hint="环比 +4.1%" hintTone="positive" />
         <KpiCard label="续约率" value="91.4%" hint="近 12 个月" hintTone="muted" />

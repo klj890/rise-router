@@ -125,7 +125,7 @@ export default function ApiKeysPage() {
                 <th style={{ textAlign: 'left' }}>组织</th>
                 <th style={{ textAlign: 'left' }}>预算</th>
                 <th style={{ textAlign: 'left' }}>模型白名单</th>
-                <th>过期</th>
+                <th style={{ textAlign: 'center' }}>过期</th>
                 <th style={{ textAlign: 'right' }}>状态</th>
               </tr>
             </thead>
