@@ -52,16 +52,41 @@ pub fn spawn_task_runtime(state: AppState) {
 
 /// 共享 HTTP 客户端（单例）。reqwest::Client 内部 Arc + 连接池，克隆开销极低；
 /// 复用同一实例避免频繁新建导致连接池不复用 → 套接字耗尽。
+///
+/// 挂自定义 DNS resolver：在**连接期**过滤私网/环回 IP——闭合 SSRF 的 DNS 重绑定缺口
+/// （pre-check 解析与实际连接是两次解析，攻击者可用短 TTL 绕过；连接期过滤无此问题）。
+/// 同时保护 webhook 与产物下载两条外呼路径。
 fn http_client() -> reqwest::Client {
     static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
     CLIENT
         .get_or_init(|| {
             reqwest::Client::builder()
                 .timeout(Duration::from_secs(60))
+                .dns_resolver(std::sync::Arc::new(BlockPrivateResolver))
                 .build()
                 .unwrap_or_default()
         })
         .clone()
+}
+
+/// 连接期 DNS 过滤：解析后剔除私网/环回/链路本地等 IP，全被剔则解析失败（拒绝连接）。
+struct BlockPrivateResolver;
+impl reqwest::dns::Resolve for BlockPrivateResolver {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        Box::pin(async move {
+            let host = name.as_str().to_string();
+            let addrs = tokio::net::lookup_host((host.as_str(), 0)).await?;
+            let safe: Vec<std::net::SocketAddr> =
+                addrs.filter(|a| !is_blocked_ip(a.ip())).collect();
+            if safe.is_empty() {
+                let e: Box<dyn std::error::Error + Send + Sync> =
+                    "host resolves only to blocked (private/loopback) addresses".into();
+                return Err(e);
+            }
+            let iter: reqwest::dns::Addrs = Box::new(safe.into_iter());
+            Ok(iter)
+        })
+    }
 }
 
 // ───────────────────────── worker（提交阶段）─────────────────────────
@@ -202,10 +227,19 @@ async fn poller_loop(state: AppState) {
                     let active = active.clone();
                     tokio::spawn(async move {
                         let tid = task.id;
+                        // RAII：无论正常结束/panic/取消都从 active 移除，避免任务假死（永不再轮询）。
+                        struct Guard(Arc<Mutex<HashSet<i64>>>, i64);
+                        impl Drop for Guard {
+                            fn drop(&mut self) {
+                                if let Ok(mut s) = self.0.lock() {
+                                    s.remove(&self.1);
+                                }
+                            }
+                        }
+                        let _guard = Guard(active, tid);
                         if let Err(e) = process_poll(&st, &cl, task).await {
                             tracing::error!(task_id = tid, error = %e, "process_poll failed");
                         }
-                        active.lock().unwrap().remove(&tid);
                     });
                 }
             }
@@ -468,7 +502,10 @@ async fn store_artifact(
                 .get(&url)
                 .send()
                 .await
-                .map_err(|e| AppError::Internal(format!("download artifact: {e}")))?;
+                .map_err(|e| AppError::Internal(format!("download artifact: {e}")))?
+                // 非 2xx（404/500…）也会 Ok：显式拦截，避免把错误页当产物存。
+                .error_for_status()
+                .map_err(|e| AppError::Internal(format!("download artifact status: {e}")))?;
             // OOM 防护：按 Content-Length 预拦 + 读取后复核大小上限。
             // 大文件的正解是流式 put_multipart 到对象存储（不全量入内存），留待片C。
             if let Some(len) = resp.content_length() {
@@ -682,11 +719,12 @@ async fn recovery_sweep(state: &AppState) -> AppResult<()> {
     Ok(())
 }
 
-/// 直接把任务置 Failed（worker 提交阶段异常用；无状态守卫，仅用于刚 load 的 Queued 任务）。
+/// 把任务置 Failed（worker 提交阶段异常用）+ 触发 webhook（与 finalize_failed 一致，
+/// 避免提交阶段失败时客户端收不到通知）。
 async fn set_failed(state: &AppState, id: i64, message: &str) -> AppResult<()> {
     let db = state.db()?;
     let now = chrono::Utc::now().fixed_offset();
-    tasks::Entity::update_many()
+    let res = tasks::Entity::update_many()
         .filter(tasks::Column::Id.eq(id))
         .filter(
             tasks::Column::Status.is_in([tasks::TaskStatus::Queued, tasks::TaskStatus::Running]),
@@ -700,5 +738,10 @@ async fn set_failed(state: &AppState, id: i64, message: &str) -> AppResult<()> {
         .col_expr(tasks::Column::UpdatedAt, Expr::value(now))
         .exec(db)
         .await?;
+    if res.rows_affected == 1 {
+        if let Some(task) = tasks::Entity::find_by_id(id).one(db).await? {
+            maybe_webhook(state, &task, "failed", Some(message.to_string()));
+        }
+    }
     Ok(())
 }
