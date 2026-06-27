@@ -118,7 +118,8 @@ pub async fn submit(
         status: Set(tasks::TaskStatus::Queued),
         input: Set(req.input),
         extra: Set(req.extra),
-        webhook_url: Set(req.webhook),
+        // 空串/纯空格 webhook 归一为 None，避免片C worker 解析非法 URL 报错
+        webhook_url: Set(req.webhook.filter(|w| !w.trim().is_empty())),
         poll_count: Set(0),
         ..Default::default()
     };
