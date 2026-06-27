@@ -42,7 +42,8 @@ pub struct ArtifactResp {
     content_type: String,
     size_bytes: Option<i64>,
     meta: Option<Value>,
-    // 片B：补 presigned url
+    /// 临时下载 URL（presigned；对象存储未配置或签名失败时为 None）
+    url: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -156,17 +157,21 @@ pub async fn get_one(
         .await?
         .ok_or(AppError::NotFound)?;
 
-    let arts = artifacts::Entity::find()
+    let rows = artifacts::Entity::find()
         .filter(artifacts::Column::TaskId.eq(id))
         .all(db)
-        .await?
-        .into_iter()
-        .map(|a| ArtifactResp {
+        .await?;
+    let mut arts = Vec::with_capacity(rows.len());
+    for a in rows {
+        // presigned 临时下载 URL（对象存储未配置/签名失败 → None，不阻断响应）
+        let url = state.presign_get(&a.s3_key).await.ok();
+        arts.push(ArtifactResp {
             content_type: a.content_type,
             size_bytes: a.size_bytes,
             meta: a.meta,
-        })
-        .collect();
+            url,
+        });
+    }
 
     Ok(Json(TaskResp {
         task,

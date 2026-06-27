@@ -38,6 +38,20 @@ pub struct ChannelHealthConfig {
     pub rt_threshold_ms: u32,
 }
 
+/// S3 兼容对象存储配置（`RR_S3_*`）。多模态任务产物落此（私有化 MinIO / 云 OSS·COS 可插拔）。
+/// 默认指向本地 docker-compose 的 MinIO。
+#[derive(Clone, Debug)]
+pub struct S3Config {
+    /// S3 端点（MinIO `http://localhost:9000` / 云厂商 region 端点）
+    pub endpoint: String,
+    pub region: String,
+    pub bucket: String,
+    pub access_key: String,
+    pub secret_key: String,
+    /// presigned 下载 URL 有效期（秒，默认 3600）
+    pub presign_ttl_secs: u64,
+}
+
 /// 运行期配置。M0 阶段从环境变量加载（配套 `.env.example`）；
 /// 后续里程碑如需分层配置文件再行扩展。
 #[derive(Clone, Debug)]
@@ -58,6 +72,8 @@ pub struct Config {
     pub billing_email: BillingEmailConfig,
     /// 渠道健康探活配置。
     pub channel_health: ChannelHealthConfig,
+    /// 对象存储配置（多模态任务产物）。
+    pub s3: S3Config,
 }
 
 impl Config {
@@ -91,6 +107,15 @@ impl Config {
                 enabled: env_bool("RR_CHANNEL_HEALTH_ENABLED"),
                 interval_minutes: env_u32("RR_CHANNEL_HEALTH_INTERVAL_MINUTES", 10).max(1),
                 rt_threshold_ms: env_u32("RR_CHANNEL_HEALTH_RT_THRESHOLD_MS", 5000),
+            },
+            s3: S3Config {
+                endpoint: env::var("RR_S3_ENDPOINT")
+                    .unwrap_or_else(|_| "http://localhost:9000".into()),
+                region: env::var("RR_S3_REGION").unwrap_or_else(|_| "us-east-1".into()),
+                bucket: env::var("RR_S3_BUCKET").unwrap_or_else(|_| "rise-artifacts".into()),
+                access_key: env::var("RR_S3_ACCESS_KEY").unwrap_or_else(|_| "minioadmin".into()),
+                secret_key: env::var("RR_S3_SECRET_KEY").unwrap_or_else(|_| "minioadmin".into()),
+                presign_ttl_secs: env_u32("RR_S3_PRESIGN_TTL_SECS", 3600) as u64,
             },
         }
     }
