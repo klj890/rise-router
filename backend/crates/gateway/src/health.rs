@@ -114,9 +114,11 @@ pub async fn run_health_check_once(
             continue; // 无测试模型等 → 跳过
         };
         summary.tested += 1;
-        crate::channel::write_back_test(db, ch.id, outcome.latency_ms)
-            .await
-            .ok();
+        // 测速写回 + 可能的熔断合并为同一行的一次 UPDATE（避免两次独立写）。
+        let auto_ban = ch.auto_ban;
+        let mut am: channels::ActiveModel = ch.into();
+        am.response_time = Set(Some(outcome.latency_ms.min(i32::MAX as i64) as i32));
+        am.test_time = Set(Some(chrono::Utc::now().fixed_offset()));
         let reason = if !outcome.ok {
             Some(
                 outcome
@@ -132,17 +134,13 @@ pub async fn run_health_check_once(
             None
         };
         if let Some(reason) = reason {
-            if ch.auto_ban {
-                transition(
-                    db,
-                    ch.id,
-                    channels::ChannelStatus::CircuitBroken,
-                    Some(reason),
-                )
-                .await?;
+            if auto_ban {
+                am.status = Set(channels::ChannelStatus::CircuitBroken);
+                am.disabled_reason = Set(Some(reason));
                 summary.disabled += 1;
             }
         }
+        am.update(db).await?;
     }
 
     // 2. 被动恢复：测 CircuitBroken 渠道，通过则恢复 Enabled
@@ -155,33 +153,19 @@ pub async fn run_health_check_once(
             continue;
         };
         summary.tested += 1;
-        crate::channel::write_back_test(db, ch.id, outcome.latency_ms)
-            .await
-            .ok();
+        // 测速写回 + 可能的恢复合并为一次 UPDATE。
+        let mut am: channels::ActiveModel = ch.into();
+        am.response_time = Set(Some(outcome.latency_ms.min(i32::MAX as i64) as i32));
+        am.test_time = Set(Some(chrono::Utc::now().fixed_offset()));
         if outcome.ok && !exceeds_rt_threshold(outcome.latency_ms, rt_threshold_ms) {
-            transition(db, ch.id, channels::ChannelStatus::Enabled, None).await?;
+            am.status = Set(channels::ChannelStatus::Enabled);
+            am.disabled_reason = Set(None);
             summary.recovered += 1;
         }
+        am.update(db).await?;
     }
 
     Ok(summary)
-}
-
-/// 改渠道状态 + 自动禁用原因（恢复时 reason=None 清空）。
-async fn transition(
-    db: &DatabaseConnection,
-    id: i32,
-    status: channels::ChannelStatus,
-    reason: Option<String>,
-) -> AppResult<()> {
-    let am = channels::ActiveModel {
-        id: Set(id),
-        status: Set(status),
-        disabled_reason: Set(reason),
-        ..Default::default()
-    };
-    am.update(db).await?;
-    Ok(())
 }
 
 #[cfg(test)]
