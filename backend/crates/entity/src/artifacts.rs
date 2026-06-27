@@ -1,0 +1,22 @@
+//! 任务产物（M5a）元数据实体。字节落对象存储，本表只存 s3_key + 元数据。
+use sea_orm::entity::prelude::*;
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel, Serialize, Deserialize)]
+#[sea_orm(table_name = "artifacts")]
+pub struct Model {
+    #[sea_orm(primary_key)]
+    pub id: i64,
+    pub task_id: i64,
+    pub bucket: String,
+    pub s3_key: String,
+    pub content_type: String,
+    pub size_bytes: Option<i64>,
+    pub meta: Option<Json>,
+    pub created_at: DateTimeWithTimeZone,
+}
+
+#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+pub enum Relation {}
+
+impl ActiveModelBehavior for ActiveModel {}
