@@ -139,10 +139,12 @@ pub async fn get_one(
     let ctx = auth(&state, &headers).await?;
     let db = state.db()?;
 
-    let task = tasks::Entity::find_by_id(id)
+    // org 行隔离在查询层强制（越域当不存在，且不把他人大 JSON 行载入内存）
+    let task = tasks::Entity::find()
+        .filter(tasks::Column::Id.eq(id))
+        .filter(tasks::Column::OrgId.eq(ctx.org_id))
         .one(db)
         .await?
-        .filter(|t| t.org_id == ctx.org_id) // 越域访问当作不存在，不泄露其存在性
         .ok_or(AppError::NotFound)?;
 
     let arts = artifacts::Entity::find()
@@ -172,10 +174,11 @@ pub async fn cancel(
     let ctx = auth(&state, &headers).await?;
     let db = state.db()?;
 
-    let task = tasks::Entity::find_by_id(id)
+    let task = tasks::Entity::find()
+        .filter(tasks::Column::Id.eq(id))
+        .filter(tasks::Column::OrgId.eq(ctx.org_id))
         .one(db)
         .await?
-        .filter(|t| t.org_id == ctx.org_id)
         .ok_or(AppError::NotFound)?;
 
     if matches!(
