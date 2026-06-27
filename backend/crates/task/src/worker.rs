@@ -207,13 +207,27 @@ async fn process_submit(state: &AppState, http: &reqwest::Client, id: i64) -> Ap
         .exec(db)
         .await?;
     if res.rows_affected == 0 {
-        // 已被取消：上游任务已提交但我方不再轮询 → 可能在厂商侧继续运行并计费（资源泄漏）。
-        // 主动取消上游留待片C；此处 warn 输出 vendor_task_id 供运营手动排查清理。
+        // 提交期间被取消（cancel 当时 status 仍 Queued、vendor_task_id 未落 → 端点无法取消上游）：
+        // 此处 vendor_task_id 已在手，直接后台尽力取消上游，真正闭合泄漏（不止于告警）。
         tracing::warn!(
             task_id = id,
             vendor_task_id = %vendor_task_id,
-            "task cancelled during upstream submission; upstream task may still run and leak"
+            "task cancelled during upstream submission; cancelling upstream"
         );
+        let base = channel.base_url.clone();
+        tokio::spawn(async move {
+            let http = http_client();
+            let ctx = PollCtx {
+                http: &http,
+                base_url: &base,
+                key: &key,
+                vendor_task_id: &vendor_task_id,
+                poll_count: 0,
+            };
+            if let Err(e) = adapter.cancel(&ctx).await {
+                tracing::warn!(task_id = id, error = %e, "upstream cancel failed; may leak");
+            }
+        });
     }
     Ok(())
 }
@@ -525,7 +539,8 @@ async fn store_artifact(
             // OOM 防护：先按 Content-Length 预拦；再**分块累计**读取，边读边查上限——
             // 兼顾 chunked（无 Content-Length）与恶意无限流，超限即中止。
             // 注：超大文件的终极正解是流式 put_multipart 直管到对象存储（不入内存），留待后续。
-            if let Some(len) = resp.content_length() {
+            let declared = resp.content_length();
+            if let Some(len) = declared {
                 if len > MAX_ARTIFACT_BYTES {
                     return Err(AppError::Internal(format!(
                         "artifact too large: {len} bytes (max {MAX_ARTIFACT_BYTES})"
@@ -534,7 +549,12 @@ async fn store_artifact(
             }
             use futures_util::StreamExt;
             let mut stream = resp.bytes_stream();
-            let mut data: Vec<u8> = Vec::new();
+            // 已知 Content-Length 时按其预分配（封顶 MAX，防恶意大 Content-Length 预占内存），
+            // 省去分块累计时的反复扩容拷贝。
+            let cap = declared
+                .map(|l| core::cmp::min(l, MAX_ARTIFACT_BYTES) as usize)
+                .unwrap_or(0);
+            let mut data: Vec<u8> = Vec::with_capacity(cap);
             while let Some(chunk) = stream.next().await {
                 let chunk = chunk.map_err(|e| AppError::Internal(format!("read artifact: {e}")))?;
                 if data.len() as u64 + chunk.len() as u64 > MAX_ARTIFACT_BYTES {
@@ -659,6 +679,7 @@ fn is_blocked_ip(ip: std::net::IpAddr) -> bool {
                 || (o[0] == 100 && (o[1] & 0xc0) == 64) // CGNAT 100.64/10（k8s/Tailscale 常见）
                 || (o[0] == 198 && (o[1] & 0xfe) == 18) // 基准测试 198.18/15
                 || (o[0] == 192 && o[1] == 0 && o[2] == 0) // IETF 协议分配 192.0.0/24
+                || v4.is_multicast() // 224.0.0.0/4 组播
                 || o[0] >= 240 // 240/4 保留 + 255.255.255.255
         }
         std::net::IpAddr::V6(v6) => {
