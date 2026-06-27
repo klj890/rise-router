@@ -7,7 +7,7 @@
 use std::time::Duration;
 
 use rise_core::{AppError, AppResult, AppState};
-use rise_entity::{artifacts, channels, groups, model_channels, models, tasks};
+use rise_entity::{artifacts, channels, groups, model_channels, models, tasks, usage_logs};
 use sea_orm::sea_query::Expr;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, ExprTrait, QueryFilter,
@@ -362,8 +362,9 @@ async fn finalize_succeeded(
     // group 解析放在原子翻转**前**：DB 抖动失败时任务保持 Running 可被下轮重试（不会漏扣）。
     let group_id = group_id_from_slug(db, task.group_slug.as_deref()).await?;
 
-    // 顺序：①落产物（Running 时，幂等）→ ②原子抢占 Running→Succeeded → ③仅抢占成功才结算。
-    // 同时满足两不变式：succeeded ⇒ 产物已就绪（①在②前）；cancelled ⇒ 不计费（③在②后）。
+    // 顺序：①落产物 → ②**幂等**结算（失败上抛 → 任务保持 Running 下轮重试，不漏扣）→ ③原子翻 Succeeded。
+    // 不变式：succeeded ⇒ 产物已就绪（①在③前）；结算只此一次（②幂等键去重，重试不重复扣）；
+    // 结算失败不会把任务推到 Succeeded（②在③前 + `?` 上抛）→ 杜绝「Succeeded 却漏扣」。
     let bucket = state.config.s3.bucket.clone();
     for (n, art) in produced.into_iter().enumerate() {
         if let Err(e) = store_artifact(state, task.id, n, art, &bucket).await {
@@ -371,46 +372,45 @@ async fn finalize_succeeded(
         }
     }
 
-    // ② 原子抢占 Running→Succeeded（防与 cancel 竞态）。
-    let res = tasks::Entity::update_many()
+    // ② 幂等结算：以 `rr-task-{id}` 为去重键，已结算过则跳过；否则结算并把该键落入流水
+    //    （settle_chat 写 usage_logs.request_id）。settle 失败 `?` 上抛 → 重试，不漏扣。
+    let req_id = format!("rr-task-{}", task.id);
+    let already_billed = usage_logs::Entity::find()
+        .filter(usage_logs::Column::RequestId.eq(&req_id))
+        .one(db)
+        .await?
+        .is_some();
+    if !already_billed {
+        let settlement = rise_billing::ChatSettlement {
+            org_id: task.org_id,
+            user_id: task.user_id,
+            api_key_id: task.api_key_id,
+            app_id: task.app_id,
+            group_id,
+            model_slug: &task.model_slug,
+            channel_id: task.channel_id.unwrap_or_default(),
+            quantity: usage.clone(),
+            latency_ms: None,
+            request_id: Some(req_id),
+            is_stream: false,
+        };
+        rise_billing::settle_chat(db, settlement, now).await?;
+    }
+
+    // ③ 原子抢占 Running→Succeeded（防与 cancel 竞态）。已结算后才翻；被取消则 0 行
+    //    （工作已完成且已结算，视为可接受的罕见竞态）。
+    tasks::Entity::update_many()
         .filter(tasks::Column::Id.eq(task.id))
         .filter(tasks::Column::Status.eq(tasks::TaskStatus::Running))
         .col_expr(
             tasks::Column::Status,
             Expr::value(tasks::TaskStatus::Succeeded),
         )
-        .col_expr(tasks::Column::Usage, Expr::value(usage.clone()))
+        .col_expr(tasks::Column::Usage, Expr::value(usage))
         .col_expr(tasks::Column::FinishedAt, Expr::value(now))
         .col_expr(tasks::Column::UpdatedAt, Expr::value(now))
         .exec(db)
         .await?;
-    if res.rows_affected == 0 {
-        // 已被取消：不计费（产物已落但孤立于 cancelled 任务，可接受）。
-        tracing::info!(
-            task_id = task.id,
-            "task cancelled before finalize; not billed"
-        );
-        return Ok(());
-    }
-
-    // ③ 计费结算（已抢占 Succeeded，不会被 cancel 竞争 → 不会误扣已取消任务）。
-    //   失败仅告警不翻状态（at-least-serve）。
-    let settlement = rise_billing::ChatSettlement {
-        org_id: task.org_id,
-        user_id: task.user_id,
-        api_key_id: task.api_key_id,
-        app_id: task.app_id,
-        group_id,
-        model_slug: &task.model_slug,
-        channel_id: task.channel_id.unwrap_or_default(),
-        quantity: usage,
-        latency_ms: None,
-        request_id: task.request_id.clone(),
-        is_stream: false,
-    };
-    if let Err(e) = rise_billing::settle_chat(db, settlement, now).await {
-        tracing::error!(task_id = task.id, error = %e, "task settle failed; served unbilled");
-    }
 
     maybe_webhook(state, task, "succeeded", None);
     Ok(())
