@@ -19,10 +19,19 @@ rise-router/
       server/              rise-server：axum 装配 + /healthz + /readyz + 中间件链骨架(trace/cors)
     migration/             SeaORM 迁移（含初始 groups 表，验证 up/down）
   frontend/shell/          Vite + React 19 + AntD 6 + TanStack Query + Zustand + react-router
-                           登录页(手机号占位) + AppLayout(十域导航) + Dashboard(探测 /readyz)
+                           登录分屏(品牌渐变) + AppLayout(侧栏分组导航+顶栏组织/⌘K/通知) + 各域富页面
     src/theme/             设计系统与可配置主题：tokens/presets/store/ThemeProvider/applyCssVars/branding
-                           克制专业风(Linear 派)·暗色优先·极光青绿#2EE6C0·预设切换+白标(外观设置页)
+                           克制专业风(Linear 派)·暗色优先·默认靛蓝紫#7C75F5(浅色#4F46E5)·预设切换+白标
+                           (2026-06-27 按 Claude Design 稿改造：默认主色 aurora→indigo；tokens 扩展
+                            surface-2/border-2/各 weak/purple/cyan/shadow，全量写入 --rr-* CSS 变量)
                            详见 docs/architecture.md §4.1；主题入口改动从 src/theme/ 起
+    src/components/ui/      共享构件：PageHeader/KpiCard/Sparkline/StatusPill/FilterTabs/FormDrawer/SectionCard
+                           (各页消费 --rr-* 变量，明暗自动联动；.rr-card/.rr-table/.rr-chip 等见 styles/global.css)
+    src/pages/             admin/CrudPage(通用 CRUD 引擎，驱动 models/groups/prices/discounts/model-channels/
+                           organizations) + admin/{ChannelsPage,ApiKeysPage}(bespoke：渠道详情抽屉、密钥预算条)
+                           + Dashboard/pricing/PricingFive(含价格计算器)/crm/report(接真实 API)
+                           + org/OrgAuth(接 /me) + billing(读 mock·充值接 /recharge) + tasks/support/apps/rbac(mock)
+                           admin CRUD 增改删逻辑抽到 pages/admin/resourceShared.tsx 复用
   docker-compose.yml       PG(5432) / Redis(6379) / MinIO(9000+9001)
   Makefile                 infra-up / be-run / migrate / fe-dev 等
   .github/workflows/ci.yml fmt+clippy+test（后端）+ pnpm build（前端）
