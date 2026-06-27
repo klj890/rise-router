@@ -1,6 +1,8 @@
 # Rise Router 功能清单与开发路线图
 
-> 版本：v0.1 · 2026-06-13 · 配套文档：[architecture.md](./architecture.md)（系统架构）、[data-model.md](./data-model.md)（数据模型）
+> 版本：v0.2 · 2026-06-13 初定 / 2026-06-27 回填 as-built 进度与前向路线 · 配套文档：[architecture.md](./architecture.md)（系统架构）、[data-model.md](./data-model.md)（数据模型）、[implementation.md](./implementation.md)（已实现）
+>
+> 第 1–2 节为**原始规划**（保留不动）；第 3 节「实施进度（as-built）」与第 4 节「前向路线」为 2026-06-27 基于真实代码（路由 / 迁移表 / 模块）核验后追加。
 
 ## 1. 功能清单（按域，与数据模型十大域一一对应）
 
@@ -64,7 +66,77 @@
 - **交付**：ICP/公安备案展示、实名认证流程、限流/熔断完善、审计日志、密钥加密轮换、备份、压测、私有化部署包。
 - **退出标准**：生产部署清单通过；安全/合规自查通过。
 
-## 3. 持续约束（贯穿所有里程碑）
+## 3. 实施进度（as-built · 2026-06-27）
+
+> 核验口径：后端各 crate 真实 `.route(...)` + `backend/migration`（28 张表）+ 关键模块（`gateway/relay.rs`、`billing/{settle,reconcile,margin,deliver}`、`rbac/lib.rs`）；前端 `frontend/shell/src` 真实 API 调用 vs mock 常量。✅ 完成 / 🟡 部分 / 🔴 未起步。
+
+### 3.1 里程碑状态
+
+| 里程碑 | 状态 | 证据 / 缺口 |
+|---|---|---|
+| **M0 脚手架** | ✅ | workspace + 9 域 crate + 28 迁移 + CI |
+| **M1 网关+定价 MVP** | ✅ | `gateway/relay.rs` 真转发并调 `rise_billing::settle_chat` 扣费；openai/anthropic/gemini 协议族适配器 + SSE；`pricing/preview`(resolve_price)；钱包 + usage_logs 闭环；管理台 CRUD |
+| **M2 财务计费** | 🟡 ~85% | ✅ 订单状态机/发票(专普票)/对账(gap+lock)/毛利+xlsx 导出/邮件 cron；❌ **微信/支付宝/对公真实支付对接**（现仅 `recharge` 手动入账，无回调验签） |
+| **M3 CRM 销售** | ✅ | 客户档案/归属历史/代客开户+充值/跟进/业绩归因 |
+| **M4 监控报表** | 🟡 ~75% | ✅ 策展数据集/指标维度/RLS/报表定义/`report/deliver.rs` 定时投递；❌ 运维时序大盘真实数据（前端 mock）、`?embed=1` iframe 嵌入、PG 只读副本读路径 |
+| **M5 可插拔+客服+多模态任务** | 🔴 | `task`/`support` 仅 `_ping`；无 App Manifest/Registry、无 OIDC Provider、无 Module Federation；前端任务/工单/App 市场/RBAC 成员表全 mock |
+| **M6 合规生产化** | 🔴 | ICP/实名仅前端占位；无审计日志/密钥加密轮换/限流完善/备份/压测/私有化包 |
+
+**小结**：核心计费引擎（M1）+ 财务后台（M2）+ CRM（M3）+ 报表引擎（M4）已成型并接通前端；**平台化可插拔、多模态异步任务、客服、合规（M5+M6）整块未动**——而平台化与多模态恰是当初定义系统区别于 new-api 的两大战略目标。
+
+### 3.2 按十域细看（真实 vs mock/缺失）
+
+| 域 | 后端 | 前端 | 主要缺口 |
+|---|---|---|---|
+| ①身份组织 | ✅ 注册/登录/org/me | ✅ 登录 + 组织认证(/me) | 密码/微信登录、实名流程、会话表 |
+| ②RBAC 认证 | ✅ 角色/权限/enforce/seed | 🟡 角色卡接 /roles，成员表 mock | **OIDC Provider（对外 SSO）未做** |
+| ③App 注册(可插拔) | 🔴 无 | 🟡 App 市场 mock | **Manifest 四要素 + Registry 全缺** |
+| ④网关路由 | ✅ relay + 3 协议族 + 渠道健康 | ✅ 渠道/模型/路由 CRUD + 抽屉 | 视频/图片任务式协议族 |
+| ⑤定价五要素 | ✅ 解耦 + preview | ✅ 五要素 + 计算器 | — |
+| ⑥计费财务 | 🟡 钱包/流水/订单/发票/对账/毛利 + 跨租户读 | ✅ 计费页接通 | **真实支付对接** |
+| ⑦多模态任务 | 🔴 仅 `_ping` | 🔴 mock | **任务状态机 + artifacts(S3) + /v1/tasks 全缺** |
+| ⑧CRM 销售 | ✅ 全套 | ✅ 接通 | — |
+| ⑨监控报表 | ✅ 数据集/RLS/投递 | 🟡 报表器接通，运维卡 mock | 运维时序、embed |
+| ⑩客服 | 🔴 仅 `_ping` | 🔴 mock | **工单/会话全缺** |
+
+### 3.3 运营债（本轮发现，建议优先清）
+
+- `crates/server/src/main.rs` 未加载 `.env`（无 dotenv，仅 `RR_DATABASE_URL` 有默认值）→ `make be-run` 起的服务拿不到 `RR_ADMIN_TOKEN`/`RR_JWT_SECRET`，登录与全部 admin/鉴权端点返 503/401。需加 dotenv 加载或在 Makefile 导出 `.env`。
+
+## 4. 前向路线（剩余里程碑，2026-06-27 重排）
+
+> 按**战略价值 + 依赖顺序**重排，回填 M2/M4 尾巴。原 M5 拆为 M5a/M5b/M5c 三条独立可交付线。
+
+### M5a — 多模态异步任务（最高战略价值，差异化核心）★
+- **后端**：`tasks` 状态机表(排队/运行/成功/失败/取消) + `artifacts` 表；统一 `POST /v1/tasks`（`type` 如 video.generation/image.generation）+ `GET /v1/tasks/{id}`；轮询 + webhook 双通道；artifacts 走 S3 兼容（复用在跑的 MinIO）；任务式协议族适配器（1 个真实厂商，如 kling/flux）；按量纲计费（price 已支持 image/second/call）。
+- **前端**：Tasks 页接真实 `/v1/tasks`（替换 mock）。
+- **退出**：一个视频任务 提交 → 轮询/回调 → 产物落 MinIO → 按秒计费入 usage_logs。
+
+### M5b — 平台可插拔基座（微内核兑现，狗粮原则）
+- **OIDC Provider**：identity 暴露 authorize/token/jwks/userinfo，供第三方 SSO。
+- **App Registry**：`apps`/`app_manifests` 表 + Manifest 四要素(auth/permissions/api_routes/frontend)解析 → 幂等派生权限点(注入 RBAC) + 网关路由挂载。
+- **前端 Module Federation**：Shell 按 manifest 运行时加载 MF remote + iframe 兜底；现有内部模块(CRM/计费/报表)改走同一注册标准声明（狗粮验证）。
+- **退出**：一个异构栈第三方 App 经标准接入完成 SSO + 菜单 + 路由 + per-app key 计费。
+
+### M5c — 客服工单
+- **后端**：`tickets`/`ticket_messages` 表 + 创建/分派/状态/优先级 + 会话消息 + org/客户关联。
+- **前端**：Support 页接真实接口（替换 mock）。
+
+### M2′ + M4′ — 财务 / 报表回填
+- **真实支付**：微信/支付宝 prepay + 异步回调验签 + 对公转账凭证流；订单 `trade_no`/`paid_at` 闭环。
+- **报表**：运维时序数据集(QPS/P99/渠道健康)真实化；`?embed=1` iframe 嵌入；PG 只读副本读路径。
+
+### M6 — 合规与生产化
+- 实名认证流程(个人/企业)、ICP/公安备案展示位接配置、审计日志、密钥加密 + 轮换、限流完善、备份、压测、私有化部署包。
+
+### 交付顺序建议
+1. **运营债**（dotenv）先清 —— 否则本地/私有化部署 admin 链路不可用。
+2. **M5a 多模态任务** —— 区别于 new-api 的核心差异化；依赖已就绪，单点可验证。
+3. **M5b 平台可插拔** —— 战略同等但工作量/风险更高，待 M5a 跑通任务子系统后接力。
+4. **M5c 客服** + **M2′/M4′ 回填** 可穿插并行。
+5. **M6 合规** 收口生产化。
+
+## 5. 持续约束（贯穿所有里程碑）
 
 - **五要素解耦不可破**：任何改动不得让模型/渠道/价格/分组/折扣重新耦合；价格解析与路由解析各自封装为独立纯函数，管理台与热路径复用同一实现。
 - **狗粮原则**：内部模块（定价/财务/CRM/报表/客服）必须走与第三方相同的 App 注册标准。
