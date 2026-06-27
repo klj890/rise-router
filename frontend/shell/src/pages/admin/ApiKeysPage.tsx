@@ -172,7 +172,7 @@ export default function ApiKeysPage() {
                       )}
                     </td>
                     <td style={{ color: 'var(--rr-text-2)' }}>
-                      {!allowed || allowed.length === 0 ? '全部模型' : allowed.length <= 2 ? allowed.join('、') : `${allowed.slice(0, 2).join('、')} +${allowed.length - 2}`}
+                      {!Array.isArray(allowed) || allowed.length === 0 ? '全部模型' : allowed.length <= 2 ? allowed.join('、') : `${allowed.slice(0, 2).join('、')} +${allowed.length - 2}`}
                     </td>
                     <td className="rr-num" style={{ textAlign: 'center', color: 'var(--rr-text-2)' }}>
                       {r.expires_at ? dayjs(r.expires_at as string).format('YYYY-MM-DD') : '长期'}

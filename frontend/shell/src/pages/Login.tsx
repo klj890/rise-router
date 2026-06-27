@@ -234,7 +234,13 @@ export default function LoginPage() {
             })}
           </div>
 
-          <Form form={form} layout="vertical" onFinish={onFinish} requiredMark={false}>
+          {/* 密码登录通道未开放：屏蔽其回车提交，避免发起无验证码登录请求 */}
+          <Form
+            form={form}
+            layout="vertical"
+            onFinish={tab === 'password' ? () => {} : onFinish}
+            requiredMark={false}
+          >
             <Form.Item
               name="phone"
               label={t('auth:login.phone')}

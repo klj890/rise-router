@@ -145,7 +145,11 @@ pub async fn orders(
         .limit(limit)
         .all(db)
         .await?;
-    let names = org_names(db, &list.iter().map(|o| o.org_id).collect::<Vec<_>>()).await?;
+    // 去重 org_id：同一组织可能有多笔订单，避免 IN 查询冗余。
+    let mut org_ids: Vec<i32> = list.iter().map(|o| o.org_id).collect();
+    org_ids.sort_unstable();
+    org_ids.dedup();
+    let names = org_names(db, &org_ids).await?;
     let rows = list
         .into_iter()
         .map(|o| OrderRow {
@@ -182,7 +186,11 @@ pub async fn invoices(
         .limit(limit)
         .all(db)
         .await?;
-    let names = org_names(db, &list.iter().map(|i| i.org_id).collect::<Vec<_>>()).await?;
+    // 去重 org_id：同一组织可能有多张发票，避免 IN 查询冗余。
+    let mut org_ids: Vec<i32> = list.iter().map(|i| i.org_id).collect();
+    org_ids.sort_unstable();
+    org_ids.dedup();
+    let names = org_names(db, &org_ids).await?;
     let rows = list
         .into_iter()
         .map(|i| InvoiceRow {
