@@ -30,6 +30,8 @@ mod m20260613_000025_create_customer_assignments;
 mod m20260613_000026_create_datasets;
 mod m20260613_000027_create_report_definitions;
 mod m20260613_000028_alter_channels_health;
+mod m20260613_000029_create_tasks;
+mod m20260613_000030_create_artifacts;
 
 pub struct Migrator;
 
@@ -65,6 +67,8 @@ impl MigratorTrait for Migrator {
             Box::new(m20260613_000026_create_datasets::Migration),
             Box::new(m20260613_000027_create_report_definitions::Migration),
             Box::new(m20260613_000028_alter_channels_health::Migration),
+            Box::new(m20260613_000029_create_tasks::Migration),
+            Box::new(m20260613_000030_create_artifacts::Migration),
         ]
     }
 }

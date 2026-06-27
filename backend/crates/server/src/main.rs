@@ -35,7 +35,16 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let bind_addr = config.bind_addr.clone();
-    let state = AppState::new(config, db);
+    let redis_url = config.redis_url.clone();
+    let mut state = AppState::new(config, db);
+
+    // Redis 池（多模态任务队列）。创建惰性、不在此连接；失败仅告警（队列功能降级）。
+    match deadpool_redis::Config::from_url(redis_url)
+        .create_pool(Some(deadpool_redis::Runtime::Tokio1))
+    {
+        Ok(pool) => state = state.with_redis(pool),
+        Err(e) => tracing::warn!(error = %e, "redis pool init failed; task queue disabled"),
+    }
 
     // 后台任务（仅 DB 连通时启动；各自的 enabled 开关在内部判定）。
     if state.db.is_some() {
@@ -85,6 +94,8 @@ fn build_router(state: AppState) -> Router {
         .nest("/api", api)
         // OpenAI 兼容入口挂在根 /v1（relay 转发）
         .merge(rise_gateway::relay_routes())
+        // 统一多模态任务 API 挂根 /v1（与 chat 同层）
+        .merge(rise_task::v1_routes())
         .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive())
         .with_state(state)

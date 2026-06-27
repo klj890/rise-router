@@ -18,6 +18,7 @@ tracing-subscriber.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
 sea-orm.workspace = true
+deadpool-redis.workspace = true
 
 rise-core.workspace = true
 rise-identity.workspace = true
