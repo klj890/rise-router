@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react'
-import { Layout, Dropdown, Input, Badge, Tooltip, Empty } from 'antd'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { Layout, Dropdown, Input, Badge, Tooltip, Empty, type InputRef } from 'antd'
 import {
   AppstoreOutlined,
   ApiOutlined,
@@ -95,6 +95,19 @@ export default function AppLayout() {
   const brand = useThemeStore((s) => s.brand)
   const appName = brand.appName ?? t('common:brand')
   const [search, setSearch] = useState('')
+  const searchRef = useRef<InputRef>(null)
+
+  // ⌘K / Ctrl+K 聚焦顶栏搜索框（与 suffix 提示一致）。
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        searchRef.current?.focus()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
 
   const isActive = (key: string) =>
     location.pathname === key || location.pathname.startsWith(key + '/')
@@ -298,6 +311,7 @@ export default function AppLayout() {
 
           {/* ⌘K 搜索 */}
           <Input
+            ref={searchRef}
             prefix={<SearchOutlined style={{ color: 'var(--rr-text-3)' }} />}
             suffix={<span className="rr-num rr-chip" style={{ fontSize: 11 }}>⌘K</span>}
             placeholder="搜索模型、渠道、租户…"

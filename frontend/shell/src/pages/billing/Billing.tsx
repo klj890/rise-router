@@ -261,7 +261,14 @@ export default function Billing() {
           <Form.Item name="org_id" label="租户组织 ID" rules={[{ required: true, message: '请填写组织 ID' }]}>
             <InputNumber style={{ width: '100%' }} min={1} precision={0} placeholder="目标组织的数字 ID" />
           </Form.Item>
-          <Form.Item name="amount" label="充值金额（元）" rules={[{ required: true, message: '请填写金额' }]}>
+          <Form.Item
+            name="amount"
+            label="充值金额（元）"
+            rules={[
+              { required: true, message: '请填写金额' },
+              { type: 'number', min: 0.01, message: '充值金额必须大于等于 0.01 元' },
+            ]}
+          >
             <InputNumber style={{ width: '100%' }} min={0.01} precision={2} placeholder="如 50000" />
           </Form.Item>
           <Form.Item name="channel" label="支付方式">

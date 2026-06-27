@@ -159,31 +159,31 @@ export default function Tasks() {
           <DrawerSection index={3} title="类型参数" last>
             {submitType === 'image' && (
               <div style={{ display: 'flex', gap: 12 }}>
-                <Form.Item label="尺寸" name="size" style={{ flex: 1 }}>
-                  <Select defaultValue="1024x1024" options={[{ value: '1024x1024', label: '1024×1024' }, { value: '1792x1024', label: '1792×1024' }]} />
+                <Form.Item label="尺寸" name="size" initialValue="1024x1024" style={{ flex: 1 }}>
+                  <Select options={[{ value: '1024x1024', label: '1024×1024' }, { value: '1792x1024', label: '1792×1024' }]} />
                 </Form.Item>
-                <Form.Item label="数量" name="n" style={{ width: 120 }}>
-                  <InputNumber min={1} max={4} defaultValue={1} style={{ width: '100%' }} />
+                <Form.Item label="数量" name="n" initialValue={1} style={{ width: 120 }}>
+                  <InputNumber min={1} max={4} style={{ width: '100%' }} />
                 </Form.Item>
               </div>
             )}
             {submitType === 'video' && (
               <div style={{ display: 'flex', gap: 12 }}>
-                <Form.Item label="时长(秒)" name="duration" style={{ flex: 1 }}>
-                  <InputNumber min={1} max={10} defaultValue={5} style={{ width: '100%' }} />
+                <Form.Item label="时长(秒)" name="duration" initialValue={5} style={{ flex: 1 }}>
+                  <InputNumber min={1} max={10} style={{ width: '100%' }} />
                 </Form.Item>
-                <Form.Item label="分辨率" name="resolution" style={{ flex: 1 }}>
-                  <Select defaultValue="720p" options={[{ value: '720p', label: '720p' }, { value: '1080p', label: '1080p' }]} />
+                <Form.Item label="分辨率" name="resolution" initialValue="720p" style={{ flex: 1 }}>
+                  <Select options={[{ value: '720p', label: '720p' }, { value: '1080p', label: '1080p' }]} />
                 </Form.Item>
               </div>
             )}
             {submitType === 'audio' && (
               <div style={{ display: 'flex', gap: 12 }}>
-                <Form.Item label="音色" name="voice" style={{ flex: 1 }}>
-                  <Select defaultValue="warm" options={[{ value: 'warm', label: '温暖' }, { value: 'news', label: '播报' }]} />
+                <Form.Item label="音色" name="voice" initialValue="warm" style={{ flex: 1 }}>
+                  <Select options={[{ value: 'warm', label: '温暖' }, { value: 'news', label: '播报' }]} />
                 </Form.Item>
-                <Form.Item label="语速" name="speed" style={{ width: 120 }}>
-                  <InputNumber min={0.5} max={2} step={0.1} defaultValue={1} style={{ width: '100%' }} />
+                <Form.Item label="语速" name="speed" initialValue={1} style={{ width: 120 }}>
+                  <InputNumber min={0.5} max={2} step={0.1} style={{ width: '100%' }} />
                 </Form.Item>
               </div>
             )}
