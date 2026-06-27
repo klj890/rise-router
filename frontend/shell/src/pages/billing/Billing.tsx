@@ -69,6 +69,8 @@ export default function Billing() {
     const code = (q.error as { response?: { status?: number } } | null)?.response?.status
     return code === 401 || code === 403
   })
+  // 非鉴权错误（500/网络）：避免静默空白，给出可定位的错误提示。
+  const hasError = [margin, tenants, orders, invoices, recon].some((q) => q.isError) && !denied
 
   const rechargeMutation = useMutation({
     mutationFn: (v: { org_id: number; amount: number; memo?: string }) => recharge(v.org_id, v.amount, v.memo),
@@ -157,6 +159,16 @@ export default function Billing() {
           style={{ marginBottom: 16 }}
           message="无财务读取权限"
           description="计费视图需 billing.read（财务/管理员角色），或在「系统设置 · 管理令牌」填入管理令牌以超管身份查看。"
+        />
+      )}
+
+      {hasError && (
+        <Alert
+          type="error"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="数据加载失败"
+          description="请检查网络连接或后端服务是否正常。"
         />
       )}
 

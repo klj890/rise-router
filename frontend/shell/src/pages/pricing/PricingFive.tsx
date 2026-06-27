@@ -38,7 +38,9 @@ export default function PricingFive() {
   const [outputTokens, setOutputTokens] = useState(500_000)
   const [costRate, setCostRate] = useState(55) // 渠道成本占售价比（估算，可调）
 
-  const preview = useMutation({ mutationFn: () => pricePreview(model, group) })
+  const preview = useMutation({
+    mutationFn: (vars: { model: string; group: string }) => pricePreview(vars.model, vars.group),
+  })
   const result: PricePreview | undefined = preview.data
 
   const rules = useQuery({
@@ -122,7 +124,7 @@ export default function PricingFive() {
               loading={preview.isPending}
               disabled={!model.trim()}
               onClick={() =>
-                preview.mutate(undefined, {
+                preview.mutate({ model, group }, {
                   onError: (e) =>
                     message.error(
                       (e as { localizedMessage?: string }).localizedMessage ??

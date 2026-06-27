@@ -108,9 +108,13 @@ export function useResourceCrud(resource: ResourceDef) {
     onSuccess: (data) => {
       refresh()
       setOpen(false)
-      if (editingId == null && resource.secret) {
-        const sv = (data as Row)?.[resource.secret.field]
-        if (typeof sv === 'string') setSecretValue(sv)
+      if (editingId == null) {
+        message.success('创建成功')
+        // 带 secret 的资源（如密钥）额外弹明文（仅此一次）。
+        if (resource.secret) {
+          const sv = (data as Row)?.[resource.secret.field]
+          if (typeof sv === 'string') setSecretValue(sv)
+        }
       } else {
         message.success('已保存')
       }
