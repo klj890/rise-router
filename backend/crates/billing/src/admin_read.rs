@@ -23,7 +23,10 @@ use serde::{Deserialize, Serialize};
 use crate::margin::period_range;
 
 /// 取指定组织 id→名称映射（仅查本页涉及的 org，避免全表扫描）。空列表直接返回空表。
-async fn org_names(db: &sea_orm::DatabaseConnection, ids: &[i32]) -> AppResult<HashMap<i32, String>> {
+async fn org_names(
+    db: &sea_orm::DatabaseConnection,
+    ids: &[i32],
+) -> AppResult<HashMap<i32, String>> {
     if ids.is_empty() {
         return Ok(HashMap::new());
     }
