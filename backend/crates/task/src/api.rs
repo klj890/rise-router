@@ -166,35 +166,43 @@ pub async fn get_one(
 }
 
 /// `POST /v1/tasks/{id}/cancel` —— 尽力取消（Queued/Running → Cancelled；幂等）。
+///
+/// **原子条件更新**防竞态：只在状态仍为 Queued/Running 时置 Cancelled，避免 read-then-update
+/// 期间 worker 把任务推进到 Succeeded/Failed 后被本次覆盖。org 隔离一并下推到 WHERE。
+/// 注：running 任务的上游 cancel 在片C 接入（凭 vendor_task_id）。
 pub async fn cancel(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<i64>,
 ) -> AppResult<Json<tasks::Model>> {
+    use sea_orm::sea_query::Expr;
     let ctx = auth(&state, &headers).await?;
     let db = state.db()?;
+    let now = chrono::Utc::now().fixed_offset();
 
-    let task = tasks::Entity::find()
+    tasks::Entity::update_many()
+        .filter(tasks::Column::Id.eq(id))
+        .filter(tasks::Column::OrgId.eq(ctx.org_id))
+        .filter(
+            tasks::Column::Status.is_in([tasks::TaskStatus::Queued, tasks::TaskStatus::Running]),
+        )
+        .col_expr(
+            tasks::Column::Status,
+            Expr::value(tasks::TaskStatus::Cancelled),
+        )
+        .col_expr(tasks::Column::FinishedAt, Expr::value(now))
+        .col_expr(tasks::Column::UpdatedAt, Expr::value(now))
+        .exec(db)
+        .await?;
+
+    // 回读权威最新状态（越域/不存在 → 404；终态任务保持原状，幂等）。
+    let latest = tasks::Entity::find()
         .filter(tasks::Column::Id.eq(id))
         .filter(tasks::Column::OrgId.eq(ctx.org_id))
         .one(db)
         .await?
         .ok_or(AppError::NotFound)?;
-
-    if matches!(
-        task.status,
-        tasks::TaskStatus::Queued | tasks::TaskStatus::Running
-    ) {
-        let now = chrono::Utc::now().fixed_offset();
-        let mut active: tasks::ActiveModel = task.into();
-        active.status = Set(tasks::TaskStatus::Cancelled);
-        active.finished_at = Set(Some(now));
-        active.updated_at = Set(now);
-        // 注：running 任务的上游 cancel 在片C接入（凭 vendor_task_id）。
-        let updated = active.update(db).await?;
-        return Ok(Json(updated));
-    }
-    Ok(Json(task))
+    Ok(Json(latest))
 }
 
 /// 入队（尽力）：失败仅告警——任务已落库 Queued，片C 启动恢复 sweep 会补入队。
