@@ -425,6 +425,9 @@ struct AnthropicTranscoder {
 
 impl SseTranscoder for AnthropicTranscoder {
     fn push(&mut self, upstream: &[u8]) -> Vec<u8> {
+        if self.done_sent {
+            return Vec::new(); // 已发错误/终止帧，丢弃后续上游字节
+        }
         let lines = self.lines.take_lines(upstream);
         let mut out = Vec::new();
         for line in lines {
@@ -499,8 +502,28 @@ impl SseTranscoder for AnthropicTranscoder {
                         self.output_tokens = o;
                     }
                 }
+                // mid-stream 错误（Anthropic `event: error`）→ 转 OpenAI 错误帧并终止
+                "error" => {
+                    let msg = ev
+                        .get("error")
+                        .and_then(|e| e.get("message"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("upstream stream error");
+                    let etype = ev
+                        .get("error")
+                        .and_then(|e| e.get("type"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("upstream_error");
+                    out.extend(sse_frame(
+                        &json!({"error": {"message": msg, "type": etype}}),
+                    ));
+                    self.done_sent = true;
+                }
                 // message_stop 不在此发末块：统一由 finish() 发（含 relay 流结束兜底，幂等）
                 _ => {}
+            }
+            if self.done_sent {
+                break; // 错误帧后停止处理后续事件
             }
         }
         out
@@ -721,5 +744,18 @@ mod tests {
         let first = t.finish();
         assert!(!first.is_empty());
         assert!(t.finish().is_empty()); // 第二次（relay 流结束兜底）幂等
+    }
+
+    #[test]
+    fn stream_mid_stream_error_emits_openai_error() {
+        // 上游流中途 event: error → 转 OpenAI 错误帧，且不再发正常末块
+        let mut t = AnthropicTranscoder::default();
+        let out = t.push(
+            b"event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"overloaded\"}}\n\n",
+        );
+        let s = String::from_utf8(out).unwrap();
+        assert!(s.contains("\"error\""));
+        assert!(s.contains("overloaded"));
+        assert!(t.finish().is_empty()); // 错误后 finish 不再发末块/usage
     }
 }

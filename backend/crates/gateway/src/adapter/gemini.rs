@@ -112,6 +112,13 @@ impl ProtocolAdapter for GeminiAdapter {
                 }
             }
             finish = map_finish_reason(cand.get("finishReason").and_then(Value::as_str));
+        } else if upstream
+            .get("promptFeedback")
+            .and_then(|f| f.get("blockReason"))
+            .is_some()
+        {
+            // 安全拦截：candidates 为空、blockReason 在 promptFeedback → content_filter（否则误报 stop）
+            finish = "content_filter";
         }
 
         let (p, c, t) = usage_metadata(upstream.get("usageMetadata"));
@@ -197,7 +204,9 @@ fn convert_contents(messages: Option<&Value>) -> (Vec<Value>, Option<Value>) {
                 }
             }
             "user" => {
-                contents.push(json!({"role": "user", "parts": convert_parts(msg.get("content"))}))
+                let mut parts = convert_parts(msg.get("content"));
+                ensure_nonempty_parts(&mut parts);
+                contents.push(json!({"role": "user", "parts": parts}))
             }
             "assistant" => {
                 let mut parts = convert_parts(msg.get("content"));
@@ -214,6 +223,7 @@ fn convert_contents(messages: Option<&Value>) -> (Vec<Value>, Option<Value>) {
                         parts.push(tool_call_to_function_call(tc));
                     }
                 }
+                ensure_nonempty_parts(&mut parts);
                 contents.push(json!({"role": "model", "parts": parts}));
             }
             "tool" => {
@@ -227,10 +237,25 @@ fn convert_contents(messages: Option<&Value>) -> (Vec<Value>, Option<Value>) {
                     .map(String::from)
                     .or_else(|| tool_names.get(call_id).cloned())
                     .unwrap_or_default();
+                // Gemini 期望 functionResponse.response 是结构化对象：尝试把 OpenAI 的 JSON 字符串
+                // 解析成 object，失败则回落 {"content": text}（仍合法）。
+                let response_obj = msg
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .and_then(|s| serde_json::from_str::<Value>(s).ok())
+                    .and_then(|v| v.as_object().cloned())
+                    .unwrap_or_else(|| {
+                        let mut m = Map::new();
+                        m.insert(
+                            "content".into(),
+                            json!(content_to_text(msg.get("content")).unwrap_or_default()),
+                        );
+                        m
+                    });
                 let part = json!({
                     "functionResponse": {
                         "name": name,
-                        "response": {"content": content_to_text(msg.get("content")).unwrap_or_default()},
+                        "response": Value::Object(response_obj),
                     }
                 });
                 if append_to_function_response(&mut contents, &part) {
@@ -268,6 +293,13 @@ fn append_to_function_response(contents: &mut [Value], part: &Value) -> bool {
         return true;
     }
     false
+}
+
+/// Gemini 要求每个 `Content.parts` 至少一个元素；空则补一个空文本占位，避免上游 400。
+fn ensure_nonempty_parts(parts: &mut Vec<Value>) {
+    if parts.is_empty() {
+        parts.push(json!({"text": ""}));
+    }
 }
 
 /// content（string | array）→ Gemini parts（text + inlineData/fileData）。
@@ -452,6 +484,9 @@ struct GeminiTranscoder {
 
 impl SseTranscoder for GeminiTranscoder {
     fn push(&mut self, upstream: &[u8]) -> Vec<u8> {
+        if self.done_sent {
+            return Vec::new(); // 已发错误/终止帧，丢弃后续上游字节
+        }
         let lines = self.lines.take_lines(upstream);
         let mut out = Vec::new();
         for line in lines {
@@ -464,6 +499,22 @@ impl SseTranscoder for GeminiTranscoder {
             let Ok(ev) = serde_json::from_str::<Value>(data) else {
                 continue;
             };
+            // mid-stream 错误：Gemini 流中途返回含 error 的负载 → 转 OpenAI 错误帧并终止
+            if let Some(err) = ev.get("error") {
+                let msg = err
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("upstream stream error");
+                let etype = err
+                    .get("status")
+                    .and_then(Value::as_str)
+                    .unwrap_or("upstream_error");
+                out.extend(sse_frame(
+                    &json!({"error": {"message": msg, "type": etype}}),
+                ));
+                self.done_sent = true;
+                break;
+            }
             if !self.role_sent {
                 self.role_sent = true;
                 out.extend(self.role_chunk());
@@ -716,5 +767,49 @@ mod tests {
         assert!(s.contains("\"total_tokens\":5"));
         assert!(s.contains("\"finish_reason\":\"stop\""));
         assert!(s.trim_end().ends_with("data: [DONE]"));
+    }
+
+    #[test]
+    fn stream_mid_stream_error_emits_openai_error() {
+        let mut t = GeminiTranscoder::default();
+        let out = t.push(
+            b"data: {\"error\":{\"code\":429,\"message\":\"quota\",\"status\":\"RESOURCE_EXHAUSTED\"}}\n\n",
+        );
+        let s = String::from_utf8(out).unwrap();
+        assert!(s.contains("\"error\""));
+        assert!(s.contains("quota"));
+        assert!(t.finish().is_empty()); // 错误后不再发末块
+    }
+
+    #[test]
+    fn request_ensures_nonempty_parts() {
+        // assistant 空内容且无 tool_calls → parts 补空占位，避免 Gemini「parts 不能为空」400
+        let req = json!({"messages": [{"role": "assistant", "content": null}]});
+        let out = GeminiAdapter.build_request_body(&req, "gemini", &cfg());
+        let parts = out["contents"][0]["parts"].as_array().unwrap();
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0]["text"], json!(""));
+    }
+
+    #[test]
+    fn tool_result_json_string_becomes_structured_object() {
+        let req = json!({"messages": [
+            {"role": "assistant", "content": null, "tool_calls": [
+                {"id": "c1", "type": "function", "function": {"name": "f", "arguments": "{}"}},
+            ]},
+            {"role": "tool", "tool_call_id": "c1", "content": "{\"temp\":22}"},
+        ]});
+        let out = GeminiAdapter.build_request_body(&req, "gemini", &cfg());
+        let resp = &out["contents"][1]["parts"][0]["functionResponse"]["response"];
+        // JSON 字符串被解析成结构化对象（而非裹进 {"content": "..."}）
+        assert_eq!(resp["temp"], json!(22));
+    }
+
+    #[test]
+    fn blocked_prompt_maps_to_content_filter() {
+        // candidates 为空 + promptFeedback.blockReason → content_filter（否则误报 stop）
+        let upstream = json!({"promptFeedback": {"blockReason": "SAFETY"}});
+        let out = GeminiAdapter.convert_response(&upstream, &cfg()).unwrap();
+        assert_eq!(out["choices"][0]["finish_reason"], json!("content_filter"));
     }
 }
