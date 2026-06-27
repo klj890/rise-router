@@ -56,11 +56,20 @@ import {
   type MetricDef,
   type ResultRow,
 } from '../../api/report'
+import { PageHeader, KpiCard } from '../../components/ui'
+import { CHART_PALETTE } from '../../theme/chartColors'
 
 const { RangePicker } = DatePicker
-// 极光主题取色：青绿主色 + 几个区分色，足够多系列时循环。
-const PALETTE = ['#2EE6C0', '#5B8DEF', '#F5A623', '#E0529C', '#9B6DFF', '#3FB950']
+// 图表系列色：共享靛蓝主导色板，足够多系列时循环。
+const PALETTE = CHART_PALETTE
 const LIMIT_DEFAULT = 1000
+
+// 运维实时卡（mock：QPS/延迟/错误率监控接口就绪后替换）
+const OPS = [
+  { label: 'QPS', value: '2,840', hint: '峰值 4,210', spark: [2300, 2620, 2480, 2900, 2740, 2980, 2840], color: 'var(--rr-primary)' },
+  { label: 'P99 延迟', value: '1.24s', hint: '近 5 分钟', spark: [1.1, 1.3, 1.2, 1.5, 1.28, 1.18, 1.24], color: 'var(--rr-warning)' },
+  { label: '错误率', value: '0.18%', hint: '近 5 分钟', spark: [0.22, 0.3, 0.19, 0.24, 0.2, 0.16, 0.18], color: 'var(--rr-success)' },
+]
 
 /** 图表 Tooltip 数值格式化：与表格千分位一致。 */
 const tooltipFmt = (value: unknown) => {
@@ -195,30 +204,30 @@ export default function ReportBuilder() {
 
   return (
     <div>
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          marginBottom: 16,
-        }}
-      >
-        <Typography.Title level={4} style={{ margin: 0 }}>
-          报表构建器
-        </Typography.Title>
-        <Space>
-          <Button icon={<FolderOpenOutlined />} onClick={() => setSavedOpen(true)}>
-            已存报表
-          </Button>
-          <Button
-            type="primary"
-            icon={<SaveOutlined />}
-            disabled={!result}
-            onClick={() => setSaveOpen(true)}
-          >
-            保存为报表
-          </Button>
-        </Space>
+      <PageHeader
+        title="监控报表"
+        subtitle="策展数据集之上的定制报表 —— 行级隔离（RLS）让四类角色各见其数据域，支持定时导出与 iframe 嵌入。"
+        extra={
+          <Space>
+            <Button icon={<FolderOpenOutlined />} onClick={() => setSavedOpen(true)}>
+              已存报表
+            </Button>
+            <Button
+              type="primary"
+              icon={<SaveOutlined />}
+              disabled={!result}
+              onClick={() => setSaveOpen(true)}
+            >
+              保存为报表
+            </Button>
+          </Space>
+        }
+      />
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 16 }}>
+        {OPS.map((o) => (
+          <KpiCard key={o.label} label={o.label} value={o.value} hint={o.hint} spark={o.spark} sparkColor={o.color} accent />
+        ))}
       </div>
 
       <Alert

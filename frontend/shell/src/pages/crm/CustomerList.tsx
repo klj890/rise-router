@@ -3,8 +3,6 @@ import {
   Table,
   Button,
   Space,
-  Typography,
-  Tag,
   Input,
   InputNumber,
   Modal,
@@ -24,7 +22,18 @@ import {
   type OnboardReq,
   type OrgType,
 } from '../../api/crm'
-import { ORG_TYPE_LABEL, ORG_STATUS_LABEL, ORG_STATUS_COLOR, REALNAME_LABEL } from './labels'
+import { ORG_TYPE_LABEL, ORG_STATUS_LABEL, REALNAME_LABEL } from './labels'
+import { PageHeader, KpiCard, SectionCard, StatusPill } from '../../components/ui'
+import type { PillTone } from '../../components/ui'
+
+const STATUS_TONE: Record<string, PillTone> = { Active: 'success', Suspended: 'neutral' }
+
+// 销售业绩（mock：接口就绪后替换为 CRM 归属聚合）
+const SALES_PERF = [
+  { name: '周慕云', amount: 742 },
+  { name: '吴桐', amount: 386 },
+  { name: '何雨桐', amount: 154 },
+]
 
 const PAGE = 50
 
@@ -105,7 +114,9 @@ export default function CustomerList() {
       key: 'status',
       width: 80,
       render: (v: Customer['status']) => (
-        <Tag color={ORG_STATUS_COLOR[v]}>{ORG_STATUS_LABEL[v] ?? v}</Tag>
+        <StatusPill tone={STATUS_TONE[v] ?? 'neutral'} dot>
+          {ORG_STATUS_LABEL[v] ?? v}
+        </StatusPill>
       ),
     },
     {
@@ -148,45 +159,48 @@ export default function CustomerList() {
     },
   ]
 
+  const maxPerf = Math.max(...SALES_PERF.map((s) => s.amount))
+
   return (
     <div>
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          marginBottom: 16,
-          alignItems: 'center',
-        }}
-      >
-        <Typography.Title level={4} style={{ margin: 0 }}>
-          客户档案
-        </Typography.Title>
-        <Space>
-          <Input
-            placeholder="按归属销售 id 过滤"
-            value={ownerInput}
-            onChange={(e) => setOwnerInput(e.target.value)}
-            onPressEnter={applyFilter}
-            allowClear
-            onClear={() => {
-              // 不能复用 applyFilter：其读到的是清除前的旧 ownerInput 闭包值（异步 setState 未生效）。
-              setOwnerInput('')
-              setOwnerFilter(undefined)
-              setStack([])
-            }}
-            style={{ width: 180 }}
-            suffix={<SearchOutlined onClick={applyFilter} style={{ cursor: 'pointer' }} />}
-          />
-          <Button
-            icon={<ReloadOutlined />}
-            onClick={() => qc.invalidateQueries({ queryKey: ['crm-customers'] })}
-          >
-            刷新
-          </Button>
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => setOpen(true)}>
-            代客开户
-          </Button>
-        </Space>
+      <PageHeader
+        title="客户与销售"
+        subtitle="客户档案、销售归属与跟进 —— 业绩基于计费流水自动归因。"
+        extra={
+          <Space>
+            <Input
+              placeholder="按归属销售 id 过滤"
+              value={ownerInput}
+              onChange={(e) => setOwnerInput(e.target.value)}
+              onPressEnter={applyFilter}
+              allowClear
+              onClear={() => {
+                // 不能复用 applyFilter：其读到的是清除前的旧 ownerInput 闭包值（异步 setState 未生效）。
+                setOwnerInput('')
+                setOwnerFilter(undefined)
+                setStack([])
+              }}
+              style={{ width: 180 }}
+              suffix={<SearchOutlined onClick={applyFilter} style={{ cursor: 'pointer' }} />}
+            />
+            <Button
+              icon={<ReloadOutlined />}
+              onClick={() => qc.invalidateQueries({ queryKey: ['crm-customers'] })}
+            >
+              刷新
+            </Button>
+            <Button type="primary" icon={<PlusOutlined />} onClick={() => setOpen(true)}>
+              代客开户
+            </Button>
+          </Space>
+        }
+      />
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 16 }}>
+        <KpiCard label="客户总数" value={rows.length || '342'} accent hint="本月新签 26" />
+        <KpiCard label="本月销售额" value="¥1.28M" hint="环比 +18.2%" hintTone="positive" />
+        <KpiCard label="客单价" value="¥3,742" hint="环比 +4.1%" hintTone="positive" />
+        <KpiCard label="续约率" value="91.4%" hint="近 12 个月" hintTone="muted" />
       </div>
 
       <Alert
@@ -209,15 +223,35 @@ export default function CustomerList() {
         />
       )}
 
-      <Table<Customer>
-        rowKey="id"
-        loading={listQuery.isLoading}
-        columns={columns}
-        dataSource={rows}
-        size="middle"
-        pagination={false}
-        scroll={{ x: true }}
-      />
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 16 }}>
+        <SectionCard title="客户档案" flush>
+          <Table<Customer>
+            rowKey="id"
+            loading={listQuery.isLoading}
+            columns={columns}
+            dataSource={rows}
+            size="middle"
+            pagination={false}
+            scroll={{ x: true }}
+          />
+        </SectionCard>
+
+        <SectionCard title="销售业绩">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            {SALES_PERF.map((s) => (
+              <div key={s.name}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 5 }}>
+                  <span style={{ color: 'var(--rr-text)' }}>{s.name}</span>
+                  <span className="rr-num" style={{ color: 'var(--rr-text-2)' }}>¥{s.amount}K</span>
+                </div>
+                <div style={{ height: 7, borderRadius: 4, background: 'var(--rr-surface-2)', overflow: 'hidden' }}>
+                  <div style={{ width: `${(s.amount / maxPerf) * 100}%`, height: '100%', background: 'var(--rr-primary)' }} />
+                </div>
+              </div>
+            ))}
+          </div>
+        </SectionCard>
+      </div>
 
       <div style={{ marginTop: 16, display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
         <Button disabled={stack.length === 0} onClick={() => setStack(stack.slice(0, -1))}>
