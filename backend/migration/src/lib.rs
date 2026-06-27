@@ -32,6 +32,7 @@ mod m20260613_000027_create_report_definitions;
 mod m20260613_000028_alter_channels_health;
 mod m20260613_000029_create_tasks;
 mod m20260613_000030_create_artifacts;
+mod m20260613_000031_index_usage_logs_request_id;
 
 pub struct Migrator;
 
@@ -69,6 +70,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260613_000028_alter_channels_health::Migration),
             Box::new(m20260613_000029_create_tasks::Migration),
             Box::new(m20260613_000030_create_artifacts::Migration),
+            Box::new(m20260613_000031_index_usage_logs_request_id::Migration),
         ]
     }
 }

@@ -57,6 +57,10 @@ pub trait TaskAdapter: Send + Sync {
     async fn submit(&self, ctx: &SubmitCtx<'_>) -> Result<String, String>;
     /// 轮询任务状态。
     async fn poll(&self, ctx: &PollCtx<'_>) -> Result<TaskPoll, String>;
+    /// 取消上游任务（尽力而为）。默认 no-op（不支持取消的厂商）；支持的覆写。
+    async fn cancel(&self, _ctx: &PollCtx<'_>) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 /// 按协议族选适配器。未知返回 None（worker 据此把任务置 Failed）。

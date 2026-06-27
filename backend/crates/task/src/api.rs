@@ -99,6 +99,8 @@ pub async fn submit(
             return Err(AppError::Forbidden);
         }
     }
+    // 资金预检：余额/授信耗尽则拒绝提交（任务执行有上游真实成本，不走 chat 的后扣透支）。
+    rise_billing::ensure_funds(db, ctx.org_id).await?;
     // 计费分组快照（org 当下分组 slug；无分组 = 默认价）
     let group_slug = match ctx.group_id {
         Some(gid) => groups::Entity::find_by_id(gid)
@@ -183,7 +185,7 @@ pub async fn get_one(
 ///
 /// **原子条件更新**防竞态：只在状态仍为 Queued/Running 时置 Cancelled，避免 read-then-update
 /// 期间 worker 把任务推进到 Succeeded/Failed 后被本次覆盖。org 隔离一并下推到 WHERE。
-/// 注：running 任务的上游 cancel 在片C 接入（凭 vendor_task_id）。
+/// 取消一个已提交上游的 Running 任务时，后台尽力调上游 cancel（凭 vendor_task_id），闭合泄漏。
 pub async fn cancel(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -194,7 +196,7 @@ pub async fn cancel(
     let db = state.db()?;
     let now = chrono::Utc::now().fixed_offset();
 
-    tasks::Entity::update_many()
+    let res = tasks::Entity::update_many()
         .filter(tasks::Column::Id.eq(id))
         .filter(tasks::Column::OrgId.eq(ctx.org_id))
         .filter(
@@ -216,6 +218,12 @@ pub async fn cancel(
         .one(db)
         .await?
         .ok_or(AppError::NotFound)?;
+
+    // 仅本次真正发生了取消转换（rows_affected==1）且任务已提交上游（有 vendor_task_id）时，
+    // 才后台取消上游——避免重复 cancel 调用重复外呼。
+    if res.rows_affected == 1 && latest.vendor_task_id.is_some() {
+        crate::worker::spawn_upstream_cancel(state.clone(), latest.clone());
+    }
     Ok(Json(latest))
 }
 

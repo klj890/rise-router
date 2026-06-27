@@ -7,7 +7,7 @@
 use std::time::Duration;
 
 use rise_core::{AppError, AppResult, AppState};
-use rise_entity::{artifacts, channels, groups, model_channels, models, tasks};
+use rise_entity::{artifacts, channels, groups, model_channels, models, tasks, usage_logs};
 use sea_orm::sea_query::Expr;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, ExprTrait, QueryFilter,
@@ -23,6 +23,9 @@ const POLL_INTERVAL_SECS: u64 = 5;
 const POLL_MAX: i32 = 120; // 超过则判超时失败（≈ POLL_MAX × 间隔）
 /// 单个产物下载入内存上限（OOM 防护；超大文件正解是流式转存，留待片C）。
 const MAX_ARTIFACT_BYTES: u64 = 256 * 1024 * 1024;
+/// 下载缓冲预分配上限：按 Content-Length 预分配但封顶此值，
+/// 防恶意上游声明超大 Content-Length 却不发数据 → 预占内存 DoS。
+const PREALLOC_CAP: u64 = 1024 * 1024;
 
 /// 启动任务运行时：先顺序跑恢复 sweep，再起 N 个 worker；poller 独立起。
 ///
@@ -96,11 +99,25 @@ async fn worker_loop(state: AppState, idx: usize) {
     loop {
         match next_queued(&state).await {
             Ok(Some(id)) => {
-                if let Err(e) = process_submit(&state, &http, id).await {
-                    tracing::error!(task_id = id, error = %e, "process_submit failed");
-                    let _ = set_failed(&state, id, &format!("submit error: {e}")).await;
+                // 仅当任务已进入稳定 DB 态（Running/Failed）才从 processing 移除；
+                // 若提交失败且置 Failed 也失败（DB 抖动），任务仍 Queued → 保留在 processing，
+                // 由 recovery_sweep 重新入队，避免「队列/processing 都没有」的永久卡死。
+                let settled = match process_submit(&state, &http, id).await {
+                    Ok(()) => true,
+                    Err(e) => {
+                        tracing::error!(task_id = id, error = %e, "process_submit failed");
+                        match set_failed(&state, id, &format!("submit error: {e}")).await {
+                            Ok(()) => true,
+                            Err(se) => {
+                                tracing::error!(task_id = id, error = %se, "set_failed failed; leave in processing for sweep");
+                                false
+                            }
+                        }
+                    }
+                };
+                if settled {
+                    let _ = lrem_processing(&state, id).await;
                 }
-                let _ = lrem_processing(&state, id).await;
             }
             Ok(None) => {} // BRPOPLPUSH 超时（无任务）→ 继续阻塞
             Err(e) => {
@@ -193,13 +210,27 @@ async fn process_submit(state: &AppState, http: &reqwest::Client, id: i64) -> Ap
         .exec(db)
         .await?;
     if res.rows_affected == 0 {
-        // 已被取消：上游任务已提交但我方不再轮询 → 可能在厂商侧继续运行并计费（资源泄漏）。
-        // 主动取消上游留待片C；此处 warn 输出 vendor_task_id 供运营手动排查清理。
+        // 提交期间被取消（cancel 当时 status 仍 Queued、vendor_task_id 未落 → 端点无法取消上游）：
+        // 此处 vendor_task_id 已在手，直接后台尽力取消上游，真正闭合泄漏（不止于告警）。
         tracing::warn!(
             task_id = id,
             vendor_task_id = %vendor_task_id,
-            "task cancelled during upstream submission; upstream task may still run and leak"
+            "task cancelled during upstream submission; cancelling upstream"
         );
+        let base = channel.base_url.clone();
+        tokio::spawn(async move {
+            let http = http_client();
+            let ctx = PollCtx {
+                http: &http,
+                base_url: &base,
+                key: &key,
+                vendor_task_id: &vendor_task_id,
+                poll_count: 0,
+            };
+            if let Err(e) = adapter.cancel(&ctx).await {
+                tracing::warn!(task_id = id, error = %e, "upstream cancel failed; may leak");
+            }
+        });
     }
     Ok(())
 }
@@ -328,9 +359,12 @@ async fn finalize_succeeded(
         .map(|m| m.billing_unit)
         .unwrap_or_else(|| "call".into());
     let usage = compute_usage(&billing_unit, &task.input);
+    // group 解析放在原子翻转**前**：DB 抖动失败时任务保持 Running 可被下轮重试（不会漏扣）。
+    let group_id = group_id_from_slug(db, task.group_slug.as_deref()).await?;
 
-    // 先落产物 + 结算，再翻 Succeeded —— 保证「客户端看到 succeeded 时产物已就绪」。
-    // 落产物到对象存储（best-effort，错误记日志不阻断）。
+    // 顺序：①落产物 → ②**幂等**结算（失败上抛 → 任务保持 Running 下轮重试，不漏扣）→ ③原子翻 Succeeded。
+    // 不变式：succeeded ⇒ 产物已就绪（①在③前）；结算只此一次（②幂等键去重，重试不重复扣）；
+    // 结算失败不会把任务推到 Succeeded（②在③前 + `?` 上抛）→ 杜绝「Succeeded 却漏扣」。
     let bucket = state.config.s3.bucket.clone();
     for (n, art) in produced.into_iter().enumerate() {
         if let Err(e) = store_artifact(state, task.id, n, art, &bucket).await {
@@ -338,28 +372,34 @@ async fn finalize_succeeded(
         }
     }
 
-    // 计费结算（复用 chat 通用结算；失败仅告警，不翻状态——at-least-serve）。
-    let group_id = group_id_from_slug(db, task.group_slug.as_deref()).await?;
-    let settlement = rise_billing::ChatSettlement {
-        org_id: task.org_id,
-        user_id: task.user_id,
-        api_key_id: task.api_key_id,
-        app_id: task.app_id,
-        group_id,
-        model_slug: &task.model_slug,
-        channel_id: task.channel_id.unwrap_or_default(),
-        quantity: usage.clone(),
-        latency_ms: None,
-        request_id: task.request_id.clone(),
-        is_stream: false,
-    };
-    if let Err(e) = rise_billing::settle_chat(db, settlement, now).await {
-        tracing::error!(task_id = task.id, error = %e, "task settle failed; served unbilled");
+    // ② 幂等结算：以 `rr-task-{id}` 为去重键，已结算过则跳过；否则结算并把该键落入流水
+    //    （settle_chat 写 usage_logs.request_id）。settle 失败 `?` 上抛 → 重试，不漏扣。
+    let req_id = format!("rr-task-{}", task.id);
+    let already_billed = usage_logs::Entity::find()
+        .filter(usage_logs::Column::RequestId.eq(&req_id))
+        .one(db)
+        .await?
+        .is_some();
+    if !already_billed {
+        let settlement = rise_billing::ChatSettlement {
+            org_id: task.org_id,
+            user_id: task.user_id,
+            api_key_id: task.api_key_id,
+            app_id: task.app_id,
+            group_id,
+            model_slug: &task.model_slug,
+            channel_id: task.channel_id.unwrap_or_default(),
+            quantity: usage.clone(),
+            latency_ms: None,
+            request_id: Some(req_id),
+            is_stream: false,
+        };
+        rise_billing::settle_chat(db, settlement, now).await?;
     }
 
-    // 原子抢占 Running→Succeeded（防与 cancel 竞态）。被取消则 0 行——产物/结算已落（罕见竞态，
-    // 视为「工作已完成」可接受；片C 再以事务收紧）。
-    let res = tasks::Entity::update_many()
+    // ③ 原子抢占 Running→Succeeded（防与 cancel 竞态）。已结算后才翻；被取消则 0 行
+    //    （工作已完成且已结算，视为可接受的罕见竞态）。
+    tasks::Entity::update_many()
         .filter(tasks::Column::Id.eq(task.id))
         .filter(tasks::Column::Status.eq(tasks::TaskStatus::Running))
         .col_expr(
@@ -371,13 +411,6 @@ async fn finalize_succeeded(
         .col_expr(tasks::Column::UpdatedAt, Expr::value(now))
         .exec(db)
         .await?;
-    if res.rows_affected == 0 {
-        tracing::info!(
-            task_id = task.id,
-            "task not running at finalize (cancelled?); artifacts/charge already applied"
-        );
-        return Ok(());
-    }
 
     maybe_webhook(state, task, "succeeded", None);
     Ok(())
@@ -506,27 +539,36 @@ async fn store_artifact(
                 // 非 2xx（404/500…）也会 Ok：显式拦截，避免把错误页当产物存。
                 .error_for_status()
                 .map_err(|e| AppError::Internal(format!("download artifact status: {e}")))?;
-            // OOM 防护：按 Content-Length 预拦 + 读取后复核大小上限。
-            // 大文件的正解是流式 put_multipart 到对象存储（不全量入内存），留待片C。
-            if let Some(len) = resp.content_length() {
+            // OOM 防护：先按 Content-Length 预拦；再**分块累计**读取，边读边查上限——
+            // 兼顾 chunked（无 Content-Length）与恶意无限流，超限即中止。
+            // 注：超大文件的终极正解是流式 put_multipart 直管到对象存储（不入内存），留待后续。
+            let declared = resp.content_length();
+            if let Some(len) = declared {
                 if len > MAX_ARTIFACT_BYTES {
                     return Err(AppError::Internal(format!(
                         "artifact too large: {len} bytes (max {MAX_ARTIFACT_BYTES})"
                     )));
                 }
             }
-            let bytes = resp
-                .bytes()
-                .await
-                .map_err(|e| AppError::Internal(format!("read artifact: {e}")))?
-                .to_vec();
-            if bytes.len() as u64 > MAX_ARTIFACT_BYTES {
-                return Err(AppError::Internal(format!(
-                    "artifact too large: {} bytes (max {MAX_ARTIFACT_BYTES})",
-                    bytes.len()
-                )));
+            use futures_util::StreamExt;
+            let mut stream = resp.bytes_stream();
+            // 已知 Content-Length 时按其预分配，但封顶 PREALLOC_CAP（1MB）——
+            // 防恶意上游声明超大 Content-Length 却不发数据导致的预占内存 DoS；
+            // 超出部分由 Vec 动态扩容承接。
+            let cap = declared
+                .map(|l| core::cmp::min(l, PREALLOC_CAP) as usize)
+                .unwrap_or(0);
+            let mut data: Vec<u8> = Vec::with_capacity(cap);
+            while let Some(chunk) = stream.next().await {
+                let chunk = chunk.map_err(|e| AppError::Internal(format!("read artifact: {e}")))?;
+                if data.len() as u64 + chunk.len() as u64 > MAX_ARTIFACT_BYTES {
+                    return Err(AppError::Internal(format!(
+                        "artifact exceeds max {MAX_ARTIFACT_BYTES} bytes; aborted"
+                    )));
+                }
+                data.extend_from_slice(&chunk);
             }
-            (bytes, content_type, meta)
+            (data, content_type, meta)
         }
     };
 
@@ -631,12 +673,18 @@ async fn webhook_url_allowed(url: &str) -> bool {
 fn is_blocked_ip(ip: std::net::IpAddr) -> bool {
     match ip {
         std::net::IpAddr::V4(v4) => {
-            v4.is_private()
+            let o = v4.octets();
+            v4.is_private() // 10/8, 172.16/12, 192.168/16
                 || v4.is_loopback()
                 || v4.is_link_local() // 169.254/16，含云元数据 169.254.169.254
                 || v4.is_unspecified()
                 || v4.is_broadcast()
-                || v4.octets()[0] == 0
+                || o[0] == 0 // 0.0.0.0/8 当前网络
+                || (o[0] == 100 && (o[1] & 0xc0) == 64) // CGNAT 100.64/10（k8s/Tailscale 常见）
+                || (o[0] == 198 && (o[1] & 0xfe) == 18) // 基准测试 198.18/15
+                || (o[0] == 192 && o[1] == 0 && o[2] == 0) // IETF 协议分配 192.0.0/24
+                || v4.is_multicast() // 224.0.0.0/4 组播
+                || o[0] >= 240 // 240/4 保留 + 255.255.255.255
         }
         std::net::IpAddr::V6(v6) => {
             v6.is_loopback()
@@ -647,6 +695,54 @@ fn is_blocked_ip(ip: std::net::IpAddr) -> bool {
             // IPv4-mapped
         }
     }
+}
+
+/// 后台尽力取消上游任务（凭 vendor_task_id）——闭合「提交后取消导致厂商侧泄漏」。
+/// 供 cancel 端点在取消一个 Running 任务时调用。无 vendor_task_id/渠道则跳过。
+pub(crate) fn spawn_upstream_cancel(state: AppState, task: tasks::Model) {
+    let (Some(vendor_task_id), Some(channel_id)) = (task.vendor_task_id.clone(), task.channel_id)
+    else {
+        return;
+    };
+    tokio::spawn(async move {
+        // 泄漏清理是关键路径：各失败分支显式记日志，便于运维感知（DB 抖动/配置不一致）。
+        let Ok(db) = state.db() else {
+            tracing::error!(task_id = task.id, %vendor_task_id, "upstream cancel skipped: db unavailable; may leak");
+            return;
+        };
+        let channel = match channels::Entity::find_by_id(channel_id).one(db).await {
+            Ok(Some(c)) => c,
+            Ok(None) => {
+                tracing::error!(task_id = task.id, channel_id, %vendor_task_id, "upstream cancel skipped: channel gone; may leak");
+                return;
+            }
+            Err(e) => {
+                tracing::error!(task_id = task.id, channel_id, error = %e, %vendor_task_id, "upstream cancel skipped: channel query failed; may leak");
+                return;
+            }
+        };
+        let Some(adapter) = adapter_for(&channel.protocol_adapter) else {
+            tracing::error!(task_id = task.id, protocol = %channel.protocol_adapter, %vendor_task_id, "upstream cancel skipped: no adapter; may leak");
+            return;
+        };
+        let http = http_client();
+        let key = channel_key(&channel);
+        let ctx = PollCtx {
+            http: &http,
+            base_url: &channel.base_url,
+            key: &key,
+            vendor_task_id: &vendor_task_id,
+            poll_count: task.poll_count,
+        };
+        match adapter.cancel(&ctx).await {
+            Ok(()) => {
+                tracing::info!(task_id = task.id, vendor_task_id = %vendor_task_id, "upstream task cancelled")
+            }
+            Err(e) => {
+                tracing::warn!(task_id = task.id, vendor_task_id = %vendor_task_id, error = %e, "upstream cancel failed; may leak")
+            }
+        }
+    });
 }
 
 /// 若任务配了 webhook 则后台投递（无 url 直接跳过）。

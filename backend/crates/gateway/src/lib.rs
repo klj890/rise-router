@@ -27,7 +27,9 @@ use serde::{Deserialize, Serialize};
 /// 已实现的协议族白名单。**新厂商若属已知协议族 = 纯配置接入**（建渠道选此值即可）；
 /// 全新协议族须先写适配器代码（`adapter/`）再加入此列表。渠道 CRUD 据此拒绝自由文本拼错。
 /// 必须与 [`adapter::adapter_for`] 的分支保持一致（白名单放行的协议族必须有适配器）。
-pub const KNOWN_PROTOCOL_ADAPTERS: &[&str] = &["openai_compatible", "anthropic", "gemini"];
+// chat 协议族（gateway relay 路由）+ 任务协议族（rise-task 的 TaskAdapter 路由，渠道经此 CRUD 创建）。
+pub const KNOWN_PROTOCOL_ADAPTERS: &[&str] =
+    &["openai_compatible", "anthropic", "gemini", "mock_task"];
 
 /// 给定模型 → 故障转移顺序的候选渠道（有效优先级/权重已算好）。
 pub async fn resolve_route(
