@@ -49,7 +49,8 @@ impl MigrationTrait for Migration {
                     .col(decimal_len_null(Tasks::BaseAmount, 18, 8))
                     .col(decimal_len_null(Tasks::ChargedAmount, 18, 8))
                     .col(text_null(Tasks::Error))
-                    .col(string_null(Tasks::WebhookUrl))
+                    // webhook URL 常带 token/query，易超 varchar(255) → text
+                    .col(text_null(Tasks::WebhookUrl))
                     // 回调投递状态：pending / delivered / failed
                     .col(string_len_null(Tasks::WebhookState, 16))
                     .col(string_len_null(Tasks::RequestId, 128))

@@ -39,11 +39,14 @@ async fn main() -> anyhow::Result<()> {
     let mut state = AppState::new(config, db);
 
     // Redis 池（多模态任务队列）。创建惰性、不在此连接；失败仅告警（队列功能降级）。
-    match deadpool_redis::Config::from_url(redis_url)
-        .create_pool(Some(deadpool_redis::Runtime::Tokio1))
-    {
-        Ok(pool) => state = state.with_redis(pool),
-        Err(e) => tracing::warn!(error = %e, "redis pool init failed; task queue disabled"),
+    // 空 url = 有意不配 Redis（轻量开发/测试）→ 跳过，不发误导性告警。
+    if !redis_url.is_empty() {
+        match deadpool_redis::Config::from_url(redis_url)
+            .create_pool(Some(deadpool_redis::Runtime::Tokio1))
+        {
+            Ok(pool) => state = state.with_redis(pool),
+            Err(e) => tracing::warn!(error = %e, "redis pool init failed; task queue disabled"),
+        }
     }
 
     // 后台任务（仅 DB 连通时启动；各自的 enabled 开关在内部判定）。

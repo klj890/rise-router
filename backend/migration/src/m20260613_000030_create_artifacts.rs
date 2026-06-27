@@ -24,7 +24,8 @@ impl MigrationTrait for Migration {
                     )
                     .col(big_integer(Artifacts::TaskId))
                     .col(string(Artifacts::Bucket))
-                    .col(string(Artifacts::S3Key))
+                    // S3 object key 最长 1024 字节（深目录/长文件名），超 varchar(255) 默认
+                    .col(string_len(Artifacts::S3Key, 1024))
                     .col(string_len(Artifacts::ContentType, 128))
                     .col(big_integer_null(Artifacts::SizeBytes))
                     // 宽高/时长等：{width,height,duration_s}

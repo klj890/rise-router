@@ -71,6 +71,12 @@ pub async fn submit(
     if req.r#type.trim().is_empty() {
         return Err(AppError::BadRequest("type is required".into()));
     }
+    // 与迁移 tasks.type varchar(48) 对齐：超长直接 400，而非交由 DB 报 500。
+    if req.r#type.len() > 48 {
+        return Err(AppError::BadRequest(
+            "type is too long (max 48 characters)".into(),
+        ));
+    }
     let model = models::Entity::find()
         .filter(models::Column::Slug.eq(&req.model))
         .one(db)
