@@ -16,8 +16,8 @@ import {
 import { useAuthStore } from '../../store/auth'
 
 // —— 状态词表 → 药丸语义（覆盖订单/发票/对账的 serde 变体名）——
-function statusMeta(status: string): { label: string; tone: PillTone } {
-  const s = status.toLowerCase()
+function statusMeta(status: string | null | undefined): { label: string; tone: PillTone } {
+  const s = String(status ?? '').toLowerCase()
   const map: Record<string, { label: string; tone: PillTone }> = {
     paid: { label: '已入账', tone: 'success' },
     pending: { label: '待支付', tone: 'warning' },
@@ -30,7 +30,7 @@ function statusMeta(status: string): { label: string; tone: PillTone } {
     void: { label: '已作废', tone: 'danger' },
     locked: { label: '已锁定', tone: 'success' },
   }
-  return map[s] ?? { label: status, tone: 'neutral' }
+  return map[s] ?? { label: status ?? '—', tone: 'neutral' }
 }
 
 const PAY_LABEL: Record<string, string> = {

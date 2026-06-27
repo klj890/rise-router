@@ -22,9 +22,15 @@ use serde::{Deserialize, Serialize};
 
 use crate::margin::period_range;
 
-/// 取全部组织 id→名称映射（端点都需给行补租户名，统一一次查询避免 N+1）。
-async fn org_names(db: &sea_orm::DatabaseConnection) -> AppResult<HashMap<i32, String>> {
-    let orgs = organizations::Entity::find().all(db).await?;
+/// 取指定组织 id→名称映射（仅查本页涉及的 org，避免全表扫描）。空列表直接返回空表。
+async fn org_names(db: &sea_orm::DatabaseConnection, ids: &[i32]) -> AppResult<HashMap<i32, String>> {
+    if ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let orgs = organizations::Entity::find()
+        .filter(organizations::Column::Id.is_in(ids.iter().copied()))
+        .all(db)
+        .await?;
     Ok(orgs.into_iter().map(|o| (o.id, o.name)).collect())
 }
 
@@ -84,14 +90,20 @@ pub async fn tenants(
         .all(db)
         .await?;
 
-    let names = org_names(db).await?;
-    // 钱包余额：org_id → balance（无钱包视为 0）。
-    let balances: HashMap<i32, Decimal> = wallets::Entity::find()
-        .all(db)
-        .await?
-        .into_iter()
-        .map(|w| (w.org_id, w.balance))
-        .collect();
+    // 仅查本期活跃 org 的名称与钱包，避免随租户总数线性增长的全表扫描。
+    let org_ids: Vec<i32> = aggs.iter().map(|a| a.org_id).collect();
+    let names = org_names(db, &org_ids).await?;
+    let balances: HashMap<i32, Decimal> = if org_ids.is_empty() {
+        HashMap::new()
+    } else {
+        wallets::Entity::find()
+            .filter(wallets::Column::OrgId.is_in(org_ids))
+            .all(db)
+            .await?
+            .into_iter()
+            .map(|w| (w.org_id, w.balance))
+            .collect()
+    };
 
     let mut rows: Vec<TenantRow> = aggs
         .into_iter()
@@ -133,7 +145,7 @@ pub async fn orders(
         .limit(limit)
         .all(db)
         .await?;
-    let names = org_names(db).await?;
+    let names = org_names(db, &list.iter().map(|o| o.org_id).collect::<Vec<_>>()).await?;
     let rows = list
         .into_iter()
         .map(|o| OrderRow {
@@ -170,7 +182,7 @@ pub async fn invoices(
         .limit(limit)
         .all(db)
         .await?;
-    let names = org_names(db).await?;
+    let names = org_names(db, &list.iter().map(|i| i.org_id).collect::<Vec<_>>()).await?;
     let rows = list
         .into_iter()
         .map(|i| InvoiceRow {

@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Button, Space, Alert, Empty, Spin, Modal, Typography } from 'antd'
+import { Button, Space, Alert, Empty, Spin, Modal, Typography, message } from 'antd'
 import { PlusOutlined, ReloadOutlined, DollarOutlined, SafetyOutlined, ClockCircleOutlined, CopyOutlined, CheckOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { PageHeader, SectionCard, StatusPill } from '../../components/ui'
@@ -35,9 +35,18 @@ export default function ApiKeysPage() {
   }, [crud.optionsByField])
 
   const copy = (id: number, value: string) => {
-    navigator.clipboard?.writeText(value)
-    setCopiedId(id)
-    window.setTimeout(() => setCopiedId((c) => (c === id ? null : c)), 1600)
+    // 仅在剪贴板可用且写入成功后才反馈「已复制」，避免不支持/失败时误导。
+    if (!navigator.clipboard) {
+      message.warning('当前环境不支持自动复制，请手动选择复制')
+      return
+    }
+    navigator.clipboard
+      .writeText(value)
+      .then(() => {
+        setCopiedId(id)
+        window.setTimeout(() => setCopiedId((c) => (c === id ? null : c)), 1600)
+      })
+      .catch(() => message.error('复制失败'))
   }
 
   if (!adminToken) {

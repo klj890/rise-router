@@ -291,7 +291,9 @@ export default function CrudPage({ resource, title }: { resource: ResourceDef; t
   const filteredRows = useMemo(() => {
     const kw = search.trim().toLowerCase()
     return allRows.filter((r) => {
-      if (statusField && statusFilter !== 'all' && r[statusField.name] !== statusFilter) return false
+      // 与 FilterTabs 的 key（String(o.value)）对齐比较：状态值可能是布尔/数字，统一转串。
+      if (statusField && statusFilter !== 'all' && String(r[statusField.name] ?? '') !== statusFilter)
+        return false
       if (kw && searchFields.length) {
         return searchFields.some((name) => String(r[name] ?? '').toLowerCase().includes(kw))
       }
