@@ -140,6 +140,14 @@ export default function Tasks() {
           <div style={{ padding: 48, textAlign: 'center' }}>
             <Spin />
           </div>
+        ) : tasksQuery.isError && !denied ? (
+          <Alert
+            type="error"
+            showIcon
+            style={{ margin: 18 }}
+            message="任务列表加载失败"
+            description="请稍后重试，或检查后端服务与管理令牌配置。"
+          />
         ) : filtered.length === 0 ? (
           <Empty style={{ padding: 48 }} description={denied ? '无权限' : '暂无任务'} />
         ) : (
