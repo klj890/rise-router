@@ -53,6 +53,8 @@ import {
   type ChartType,
   type ReportConfig,
   type ReportDefinition,
+  type MetricDef,
+  type ResultRow,
 } from '../../api/report'
 
 const { RangePicker } = DatePicker
@@ -168,26 +170,25 @@ export default function ReportBuilder() {
   }
 
   const canRun = !!slug && metrics.length > 0
-  const canChart = chartType !== 'table' && (result?.dimensions.length ?? 0) >= 1
+  // 图表需至少一个维度作 X 轴；整体聚合（无维度）时退化为表格展示。
+  const canChart = result != null && chartType !== 'table' && result.dimensions.length > 0
 
-  const tableColumns: ColumnsType<Record<string, string | number | null>> = useMemo(() => {
+  // 表格列：维度列（原值）+ 指标列（右对齐 + 千分位）；label 取数据集声明，缺则回落 key。
+  const tableColumns: ColumnsType<ResultRow> = useMemo(() => {
     if (!result) return []
-    const dimCols = result.dimensions.map((d) => ({
-      title: dataset?.dimensions.find((x) => x.key === d)?.label ?? d,
+    const labelOf = (key: string, defs: MetricDef[]) =>
+      defs.find((d) => d.key === key)?.label ?? key
+    const dimCols: ColumnsType<ResultRow> = result.dimensions.map((d) => ({
+      title: labelOf(d, dataset?.dimensions ?? []),
       dataIndex: d,
       key: d,
-      render: (v: unknown) => (v == null ? '—' : String(v)),
     }))
-    const metCols = result.metrics.map((m) => ({
-      title: dataset?.metrics.find((x) => x.key === m)?.label ?? m,
+    const metCols: ColumnsType<ResultRow> = result.metrics.map((m) => ({
+      title: labelOf(m, dataset?.metrics ?? []),
       dataIndex: m,
       key: m,
       align: 'right' as const,
-      render: (v: unknown) => {
-        if (v == null) return '—'
-        const num = Number(v)
-        return Number.isNaN(num) ? String(v) : num.toLocaleString('zh-CN', { maximumFractionDigits: 2 })
-      },
+      render: (v: unknown) => tooltipFmt(v),
     }))
     return [...dimCols, ...metCols]
   }, [result, dataset])
