@@ -26,6 +26,113 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+/* —— 设计系统通用构件样式 —— */
+
+/* 标准内容卡：14px 圆角 + 细边 + 阴影 */
+.rr-card {
+  background: var(--rr-surface);
+  border: 1px solid var(--rr-border);
+  border-radius: 14px;
+  box-shadow: var(--rr-shadow);
+}
+
+/* 可点击/可 hover 的卡（渠道行、App 卡等） */
+.rr-card-hover {
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease,
+    transform 0.15s ease;
+  cursor: pointer;
+}
+.rr-card-hover:hover {
+  border-color: var(--rr-border-2);
+  box-shadow: var(--rr-shadow-lg);
+}
+
+/* 芯片（能力标签、模型多选项） */
+.rr-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 9px;
+  border-radius: 7px;
+  font-size: 12px;
+  background: var(--rr-surface-2);
+  color: var(--rr-text-2);
+  border: 1px solid var(--rr-border);
+}
+
+/* 品牌渐变首字头像 */
+.rr-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-weight: 600;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #5b50e8, #7c4ddb);
+  flex-shrink: 0;
+}
+
+/* 11px 大写分组小标题（侧栏分组、表头风格） */
+.rr-eyebrow {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--rr-text-3);
+}
+
+/* 细分隔的统计网格格子（渠道详情等） */
+.rr-stat-cell {
+  background: var(--rr-surface-2);
+  border: 1px solid var(--rr-border);
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+
+/* 登录页：窄屏隐藏左侧品牌大图，表单占满 */
+@media (max-width: 900px) {
+  .rr-login-hero {
+    display: none !important;
+  }
+}
+
+/* 轻量自定义表格（渠道、模型、密钥等 bespoke 列表） */
+.rr-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13.5px;
+}
+.rr-table thead th {
+  text-align: right;
+  padding: 11px 18px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--rr-text-3);
+  background: var(--rr-surface-2);
+  border-bottom: 1px solid var(--rr-border);
+  white-space: nowrap;
+}
+.rr-table tbody td {
+  padding: 13px 18px;
+  border-bottom: 1px solid var(--rr-border-secondary);
+  color: var(--rr-text);
+  vertical-align: middle;
+}
+.rr-table tbody tr:last-child td {
+  border-bottom: none;
+}
+.rr-row {
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+.rr-row:hover td {
+  background: var(--rr-fill);
+}
+
 /* 克制的自定义滚动条 */
 * {
   scrollbar-width: thin;
