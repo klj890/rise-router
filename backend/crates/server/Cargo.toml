@@ -19,6 +19,7 @@ serde_json.workspace = true
 anyhow.workspace = true
 sea-orm.workspace = true
 deadpool-redis.workspace = true
+object_store.workspace = true
 
 rise-core.workspace = true
 rise-identity.workspace = true

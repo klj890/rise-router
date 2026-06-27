@@ -56,6 +56,8 @@ async-stream = "0.3"
 futures-util = "0.3"
 rust_xlsxwriter = "0.92"
 deadpool-redis = "0.18"
+object_store = { version = "0.11", features = ["aws"] }
+bytes = "1"
 lettre = { version = "0.11", default-features = false, features = [
     "tokio1-rustls-tls",
     "smtp-transport",

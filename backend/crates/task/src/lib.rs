@@ -1,15 +1,20 @@
-//! 多模态任务域（M5a）：统一 `/v1/tasks` 提交/查询/取消 + 状态机 + 队列。
+//! 多模态任务域（M5a）：统一 `/v1/tasks` 提交/查询/取消 + 状态机 + 队列 + 运行时。
 //!
-//! 片A：数据 + API 骨架 + Redis 入队（worker/poller 在片B）。
 //! - `v1_routes()` 挂根路径（OpenAI 风格 `/v1/tasks`，与 `/v1/chat/completions` 同层）。
 //! - `routes()` 留 `/api/task`（内部/管理用，暂 `_ping`）。
+//! - `spawn_task_runtime()`：worker（队列消费 + 提交上游）+ poller（扫 running 续查，可恢复）。
 use axum::{
     routing::{get, post},
     Router,
 };
 use rise_core::AppState;
 
+/// 任务式厂商适配器扩展点（新增真实厂商在此实现 `TaskAdapter` 并注册到 `adapter_for`）。
+pub mod adapter;
 mod api;
+mod worker;
+
+pub use worker::spawn_task_runtime;
 
 /// 任务队列（Redis list）键：submit 时 LPUSH 任务 id，worker BRPOPLPUSH 消费（片B）。
 pub const QUEUE_KEY: &str = "rr:tasks:queued";

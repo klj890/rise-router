@@ -36,6 +36,7 @@ async fn main() -> anyhow::Result<()> {
 
     let bind_addr = config.bind_addr.clone();
     let redis_url = config.redis_url.clone();
+    let s3_cfg = config.s3.clone();
     let mut state = AppState::new(config, db);
 
     // Redis 池（多模态任务队列）。创建惰性、不在此连接；失败仅告警（队列功能降级）。
@@ -49,12 +50,24 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
+    // S3 兼容对象存储（任务产物）。构造不连接；失败仅告警（产物落盘降级）。
+    match build_store(&s3_cfg) {
+        Ok(store) => state = state.with_store(std::sync::Arc::new(store)),
+        Err(e) => tracing::warn!(error = %e, "object store init failed; task artifacts disabled"),
+    }
+
     // 后台任务（仅 DB 连通时启动；各自的 enabled 开关在内部判定）。
     if state.db.is_some() {
         // 月度毛利月报邮件 cron（RR_BILLING_EMAIL_ENABLED=true 时进入循环）。
         rise_billing::spawn_email_cron(state.clone());
         // 渠道健康探活 + 被动恢复（RR_CHANNEL_HEALTH_ENABLED=true 时进入循环）。
         rise_gateway::health::spawn_health_check(state.clone());
+        // 多模态任务 worker（队列消费 + 提交上游）+ poller（扫 running 续查，可恢复）。
+        if state.redis.is_some() && state.store.is_some() {
+            rise_task::spawn_task_runtime(state.clone());
+        } else {
+            tracing::warn!("task runtime not started: redis or object store unavailable");
+        }
     }
 
     let app = build_router(state);
@@ -63,6 +76,21 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("rise-server listening on http://{bind_addr}");
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+/// 构建 S3 兼容对象存储客户端（不连接；put/presign 时才发请求）。
+/// allow_http=true 兼容本地 MinIO（http 端点）。S3-compat 后端统一走 AmazonS3。
+fn build_store(
+    cfg: &rise_core::S3Config,
+) -> Result<object_store::aws::AmazonS3, object_store::Error> {
+    object_store::aws::AmazonS3Builder::new()
+        .with_endpoint(&cfg.endpoint)
+        .with_region(&cfg.region)
+        .with_bucket_name(&cfg.bucket)
+        .with_access_key_id(&cfg.access_key)
+        .with_secret_access_key(&cfg.secret_key)
+        .with_allow_http(true)
+        .build()
 }
 
 fn init_tracing(log_level: &str) {
