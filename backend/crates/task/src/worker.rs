@@ -21,6 +21,8 @@ use crate::{PROCESSING_KEY, QUEUE_KEY};
 const WORKER_CONCURRENCY: usize = 4;
 const POLL_INTERVAL_SECS: u64 = 5;
 const POLL_MAX: i32 = 120; // 超过则判超时失败（≈ POLL_MAX × 间隔）
+/// 单个产物下载入内存上限（OOM 防护；超大文件正解是流式转存，留待片C）。
+const MAX_ARTIFACT_BYTES: u64 = 256 * 1024 * 1024;
 
 /// 启动任务运行时：先顺序跑恢复 sweep，再起 N 个 worker；poller 独立起。
 ///
@@ -48,12 +50,18 @@ pub fn spawn_task_runtime(state: AppState) {
     tracing::info!("task runtime starting (sweep → workers; poller live)");
 }
 
-/// 共享 HTTP 客户端（适配器外呼用）。
+/// 共享 HTTP 客户端（单例）。reqwest::Client 内部 Arc + 连接池，克隆开销极低；
+/// 复用同一实例避免频繁新建导致连接池不复用 → 套接字耗尽。
 fn http_client() -> reqwest::Client {
-    reqwest::Client::builder()
-        .timeout(Duration::from_secs(60))
-        .build()
-        .unwrap_or_default()
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .timeout(Duration::from_secs(60))
+                .build()
+                .unwrap_or_default()
+        })
+        .clone()
 }
 
 // ───────────────────────── worker（提交阶段）─────────────────────────
@@ -150,16 +158,22 @@ async fn process_submit(state: &AppState, http: &reqwest::Client, id: i64) -> Ap
             tasks::Column::Status,
             Expr::value(tasks::TaskStatus::Running),
         )
-        .col_expr(tasks::Column::VendorTaskId, Expr::value(vendor_task_id))
+        .col_expr(
+            tasks::Column::VendorTaskId,
+            Expr::value(vendor_task_id.clone()),
+        )
         .col_expr(tasks::Column::ChannelId, Expr::value(channel.id))
         .col_expr(tasks::Column::StartedAt, Expr::value(now))
         .col_expr(tasks::Column::UpdatedAt, Expr::value(now))
         .exec(db)
         .await?;
     if res.rows_affected == 0 {
-        tracing::info!(
+        // 已被取消：上游任务已提交但我方不再轮询 → 可能在厂商侧继续运行并计费（资源泄漏）。
+        // 主动取消上游留待片C；此处 warn 输出 vendor_task_id 供运营手动排查清理。
+        tracing::warn!(
             task_id = id,
-            "task no longer queued at submit (cancelled?); skipped"
+            vendor_task_id = %vendor_task_id,
+            "task cancelled during upstream submission; upstream task may still run and leak"
         );
     }
     Ok(())
@@ -168,20 +182,30 @@ async fn process_submit(state: &AppState, http: &reqwest::Client, id: i64) -> Ap
 // ───────────────────────── poller（运行阶段，可恢复）─────────────────────────
 
 async fn poller_loop(state: AppState) {
+    use std::collections::HashSet;
+    use std::sync::{Arc, Mutex};
     let http = http_client();
+    // 在飞轮询去重：跨 tick 同一任务仍 Running 时不重复 spawn process_poll，
+    // 杜绝并发 finalize 导致的重复计费/重复落产物（单实例假设）。
+    let active: Arc<Mutex<HashSet<i64>>> = Arc::new(Mutex::new(HashSet::new()));
     loop {
         tokio::time::sleep(Duration::from_secs(POLL_INTERVAL_SECS)).await;
         match running_tasks(&state).await {
             Ok(list) => {
-                // 并发轮询：单个慢/超时上游不阻塞整轮（每任务独立 spawn）。
                 for task in list {
+                    // 已有在飞协程则跳过（insert 返回 false = 已存在）
+                    if !active.lock().unwrap().insert(task.id) {
+                        continue;
+                    }
                     let st = state.clone();
                     let cl = http.clone();
+                    let active = active.clone();
                     tokio::spawn(async move {
                         let tid = task.id;
                         if let Err(e) = process_poll(&st, &cl, task).await {
                             tracing::error!(task_id = tid, error = %e, "process_poll failed");
                         }
+                        active.lock().unwrap().remove(&tid);
                     });
                 }
             }
@@ -281,7 +305,7 @@ async fn finalize_succeeded(
     }
 
     // 计费结算（复用 chat 通用结算；失败仅告警，不翻状态——at-least-serve）。
-    let group_id = group_id_from_slug(db, task.group_slug.as_deref()).await;
+    let group_id = group_id_from_slug(db, task.group_slug.as_deref()).await?;
     let settlement = rise_billing::ChatSettlement {
         org_id: task.org_id,
         user_id: task.user_id,
@@ -390,16 +414,17 @@ fn compute_usage(billing_unit: &str, input: &Value) -> Value {
     }
 }
 
-/// group_slug → group_id（计费快照解析；缺省/找不到 → None = 默认价）。
-async fn group_id_from_slug(db: &DatabaseConnection, slug: Option<&str>) -> Option<i32> {
-    let slug = slug?;
-    groups::Entity::find()
+/// group_slug → group_id（计费快照解析；slug 为空/找不到 → None = 默认价）。
+/// **DB 错误向上抛**（不静默回退默认价）：抖动时让结算失败重试，避免漏扣。
+async fn group_id_from_slug(db: &DatabaseConnection, slug: Option<&str>) -> AppResult<Option<i32>> {
+    let Some(slug) = slug else {
+        return Ok(None);
+    };
+    let group = groups::Entity::find()
         .filter(groups::Column::Slug.eq(slug))
         .one(db)
-        .await
-        .ok()
-        .flatten()
-        .map(|g| g.id)
+        .await?;
+    Ok(group.map(|g| g.id))
 }
 
 /// 落一个产物到对象存储 + 插 artifacts 行。
@@ -444,11 +469,26 @@ async fn store_artifact(
                 .send()
                 .await
                 .map_err(|e| AppError::Internal(format!("download artifact: {e}")))?;
+            // OOM 防护：按 Content-Length 预拦 + 读取后复核大小上限。
+            // 大文件的正解是流式 put_multipart 到对象存储（不全量入内存），留待片C。
+            if let Some(len) = resp.content_length() {
+                if len > MAX_ARTIFACT_BYTES {
+                    return Err(AppError::Internal(format!(
+                        "artifact too large: {len} bytes (max {MAX_ARTIFACT_BYTES})"
+                    )));
+                }
+            }
             let bytes = resp
                 .bytes()
                 .await
                 .map_err(|e| AppError::Internal(format!("read artifact: {e}")))?
                 .to_vec();
+            if bytes.len() as u64 > MAX_ARTIFACT_BYTES {
+                return Err(AppError::Internal(format!(
+                    "artifact too large: {} bytes (max {MAX_ARTIFACT_BYTES})",
+                    bytes.len()
+                )));
+            }
             (bytes, content_type, meta)
         }
     };
@@ -486,6 +526,12 @@ fn fire_webhook(
     error: Option<String>,
 ) {
     tokio::spawn(async move {
+        // SSRF 防护：拒绝指向私网/环回/链路本地/云元数据的回调地址。
+        if !webhook_url_allowed(&url).await {
+            tracing::warn!(task_id, url = %url, "webhook blocked by ssrf guard");
+            mark_webhook_state(&state, task_id, "blocked").await;
+            return;
+        }
         let payload = json!({
             "id": task_id,
             "type": task_type,
@@ -499,17 +545,71 @@ fn fire_webhook(
             .await
             .map(|r| r.status().is_success())
             .unwrap_or(false);
-        if let Ok(db) = state.db() {
-            let _ = tasks::Entity::update_many()
-                .filter(tasks::Column::Id.eq(task_id))
-                .col_expr(
-                    tasks::Column::WebhookState,
-                    Expr::value(if delivered { "delivered" } else { "failed" }),
-                )
-                .exec(db)
-                .await;
-        }
+        mark_webhook_state(
+            &state,
+            task_id,
+            if delivered { "delivered" } else { "failed" },
+        )
+        .await;
     });
+}
+
+async fn mark_webhook_state(state: &AppState, task_id: i64, st: &'static str) {
+    if let Ok(db) = state.db() {
+        let _ = tasks::Entity::update_many()
+            .filter(tasks::Column::Id.eq(task_id))
+            .col_expr(tasks::Column::WebhookState, Expr::value(st))
+            .exec(db)
+            .await;
+    }
+}
+
+/// SSRF 防护：仅放行 http/https，且解析后的所有 IP 均非私网/环回/链路本地/未指定。
+/// 主机解析失败或无可用 IP → 拒绝（保守）。
+async fn webhook_url_allowed(url: &str) -> bool {
+    let Ok(parsed) = reqwest::Url::parse(url) else {
+        return false;
+    };
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return false;
+    }
+    let Some(host) = parsed.host_str().map(str::to_owned) else {
+        return false;
+    };
+    let port = parsed.port_or_known_default().unwrap_or(80);
+    let Ok(addrs) = tokio::net::lookup_host((host.as_str(), port)).await else {
+        return false;
+    };
+    let mut any = false;
+    for a in addrs {
+        any = true;
+        if is_blocked_ip(a.ip()) {
+            return false;
+        }
+    }
+    any
+}
+
+/// 是否为禁止外呼的 IP（私网 / 环回 / 链路本地 169.254 / 未指定 / 广播 / ULA 等）。
+fn is_blocked_ip(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            v4.is_private()
+                || v4.is_loopback()
+                || v4.is_link_local() // 169.254/16，含云元数据 169.254.169.254
+                || v4.is_unspecified()
+                || v4.is_broadcast()
+                || v4.octets()[0] == 0
+        }
+        std::net::IpAddr::V6(v6) => {
+            v6.is_loopback()
+                || v6.is_unspecified()
+                || (v6.segments()[0] & 0xfe00) == 0xfc00 // ULA fc00::/7
+                || (v6.segments()[0] & 0xffc0) == 0xfe80 // 链路本地 fe80::/10
+                || v6.to_ipv4().is_some_and(|m| is_blocked_ip(std::net::IpAddr::V4(m)))
+            // IPv4-mapped
+        }
+    }
 }
 
 /// 若任务配了 webhook 则后台投递（无 url 直接跳过）。
