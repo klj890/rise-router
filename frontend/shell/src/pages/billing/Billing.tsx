@@ -164,7 +164,7 @@ export default function Billing() {
         <div style={{ padding: 60, textAlign: 'center' }}>
           <Spin />
         </div>
-      ) : (
+      ) : denied ? null : (
         <Tabs
           items={[
             { key: 'overview', label: '账单总览', children: overview },

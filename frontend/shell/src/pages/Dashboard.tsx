@@ -172,11 +172,11 @@ export default function DashboardPage() {
           title="最近调用"
           extra={
             <span style={{ display: 'inline-flex', gap: 10, alignItems: 'center' }}>
-              <StatusPill tone={backendUp ? 'success' : 'danger'} dot>
-                后端 {backendUp ? '在线' : '离线'}
+              <StatusPill tone={ready.isLoading ? 'warning' : backendUp ? 'success' : 'danger'} dot>
+                后端 {ready.isLoading ? '连接中' : backendUp ? '在线' : '离线'}
               </StatusPill>
-              <StatusPill tone={dbUp ? 'success' : 'warning'} dot>
-                DB {dbUp ? '正常' : ready.data?.db ?? '探测中'}
+              <StatusPill tone={ready.isLoading ? 'warning' : dbUp ? 'success' : 'warning'} dot>
+                DB {ready.isLoading ? '探测中' : dbUp ? '正常' : ready.data?.db ?? '异常'}
               </StatusPill>
             </span>
           }

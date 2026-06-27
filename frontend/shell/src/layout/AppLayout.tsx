@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Layout, Dropdown, Input, Badge, Tooltip, Empty, type InputRef } from 'antd'
+import { Layout, Dropdown, Input, Badge, Tooltip, Empty, message, type InputRef } from 'antd'
 import {
   AppstoreOutlined,
   ApiOutlined,
@@ -317,6 +317,9 @@ export default function AppLayout() {
             placeholder="搜索模型、渠道、租户…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
+            onPressEnter={() =>
+              search.trim() && message.info(`全局搜索即将开放：「${search.trim()}」`)
+            }
             allowClear
             style={{ maxWidth: 360, flex: 1 }}
           />
