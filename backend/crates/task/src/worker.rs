@@ -705,11 +705,24 @@ pub(crate) fn spawn_upstream_cancel(state: AppState, task: tasks::Model) {
         return;
     };
     tokio::spawn(async move {
-        let Ok(db) = state.db() else { return };
-        let Ok(Some(channel)) = channels::Entity::find_by_id(channel_id).one(db).await else {
+        // 泄漏清理是关键路径：各失败分支显式记日志，便于运维感知（DB 抖动/配置不一致）。
+        let Ok(db) = state.db() else {
+            tracing::error!(task_id = task.id, %vendor_task_id, "upstream cancel skipped: db unavailable; may leak");
             return;
         };
+        let channel = match channels::Entity::find_by_id(channel_id).one(db).await {
+            Ok(Some(c)) => c,
+            Ok(None) => {
+                tracing::error!(task_id = task.id, channel_id, %vendor_task_id, "upstream cancel skipped: channel gone; may leak");
+                return;
+            }
+            Err(e) => {
+                tracing::error!(task_id = task.id, channel_id, error = %e, %vendor_task_id, "upstream cancel skipped: channel query failed; may leak");
+                return;
+            }
+        };
         let Some(adapter) = adapter_for(&channel.protocol_adapter) else {
+            tracing::error!(task_id = task.id, protocol = %channel.protocol_adapter, %vendor_task_id, "upstream cancel skipped: no adapter; may leak");
             return;
         };
         let http = http_client();
