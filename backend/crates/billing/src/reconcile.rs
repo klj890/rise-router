@@ -198,7 +198,7 @@ pub async fn list(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> AppResult<Json<Vec<reconciliations::Model>>> {
-    rise_identity::require(&state, &headers, "billing.manage").await?;
+    rise_identity::require(&state, &headers, "billing.read").await?;
     let db = state.db()?;
 
     let list = reconciliations::Entity::find()
@@ -214,7 +214,7 @@ pub async fn get_one(
     headers: HeaderMap,
     Path(id): Path<i32>,
 ) -> AppResult<Json<reconciliations::Model>> {
-    rise_identity::require(&state, &headers, "billing.manage").await?;
+    rise_identity::require(&state, &headers, "billing.read").await?;
     let db = state.db()?;
 
     let r = reconciliations::Entity::find_by_id(id)

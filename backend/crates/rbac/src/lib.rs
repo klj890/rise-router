@@ -22,6 +22,11 @@ pub const PERMISSIONS: &[(&str, &str, &str)] = &[
     ("pricing.manage", "pricing", "分组 / 价格 / 折扣 管理"),
     ("identity.manage", "identity", "组织 / 密钥 管理"),
     ("billing.manage", "billing", "充值 / 订单 / 对账 管理"),
+    (
+        "billing.read",
+        "billing",
+        "账单 / 流水 / 对账 / 毛利 查看（跨租户财务视图）",
+    ),
     ("rbac.manage", "rbac", "角色授予 / 权限查看 管理"),
     ("crm.read", "crm", "客户档案 / 跟进 / 归属 查看（本人名下）"),
     ("crm.read.all", "crm", "跨销售查看全部客户（无归属边界）"),
@@ -59,6 +64,7 @@ pub fn permissions_for_role(role_slug: &str) -> Vec<&'static str> {
         // 财务看全量客户业绩（read + read.all），但不代客操作、不改归属；报表全量财务/CRM 数据集
         "finance" => vec![
             "billing.manage",
+            "billing.read",
             "pricing.manage",
             "crm.read",
             "crm.read.all",
