@@ -391,11 +391,17 @@ async fn finalize_succeeded(
             channel_id: task.channel_id.unwrap_or_default(),
             quantity: usage.clone(),
             latency_ms: None,
-            request_id: Some(req_id),
+            request_id: Some(req_id.clone()),
             is_stream: false,
         };
         rise_billing::settle_chat(db, settlement, now).await?;
     }
+    // 回读流水金额，连同状态一起落任务行（供控制台监控显示 base/charged）。
+    let billed = usage_logs::Entity::find()
+        .filter(usage_logs::Column::RequestId.eq(&req_id))
+        .one(db)
+        .await?;
+    let (base_amt, charged_amt) = billed.map(|l| (l.base_amount, l.charged_amount)).unzip();
 
     // ③ 原子抢占 Running→Succeeded（防与 cancel 竞态）。已结算后才翻；被取消则 0 行
     //    （工作已完成且已结算，视为可接受的罕见竞态）。
@@ -407,6 +413,8 @@ async fn finalize_succeeded(
             Expr::value(tasks::TaskStatus::Succeeded),
         )
         .col_expr(tasks::Column::Usage, Expr::value(usage))
+        .col_expr(tasks::Column::BaseAmount, Expr::value(base_amt))
+        .col_expr(tasks::Column::ChargedAmount, Expr::value(charged_amt))
         .col_expr(tasks::Column::FinishedAt, Expr::value(now))
         .col_expr(tasks::Column::UpdatedAt, Expr::value(now))
         .exec(db)
