@@ -11,6 +11,7 @@ use rise_core::AppState;
 
 /// 任务式厂商适配器扩展点（新增真实厂商在此实现 `TaskAdapter` 并注册到 `adapter_for`）。
 pub mod adapter;
+mod admin;
 mod api;
 mod worker;
 
@@ -21,9 +22,12 @@ pub const QUEUE_KEY: &str = "rr:tasks:queued";
 /// worker 取出后暂存的处理中列表（崩溃恢复用，片B/C）。
 pub const PROCESSING_KEY: &str = "rr:tasks:processing";
 
-/// 域内部/管理路由（挂 `/api/task`）。
+/// 域内部/管理路由（挂 `/api/task`）。控制台监控视图走管理令牌守卫的跨租户只读列表 + 取消。
 pub fn routes() -> Router<AppState> {
-    Router::new().route("/_ping", get(|| async { "task ok" }))
+    Router::new()
+        .route("/_ping", get(|| async { "task ok" }))
+        .route("/admin/tasks", get(admin::list))
+        .route("/admin/tasks/{id}/cancel", post(admin::cancel))
 }
 
 /// 对外统一任务 API（挂根 `/v1`，Bearer 密钥鉴权 + org 行隔离）。
