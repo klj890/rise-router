@@ -27,6 +27,17 @@ pub struct BillingEmailConfig {
     pub dry_run: bool,
 }
 
+/// 渠道健康探活配置（`RR_CHANNEL_HEALTH_*`）。单实例假设；多实例选主留后续。
+#[derive(Clone, Debug)]
+pub struct ChannelHealthConfig {
+    /// 总开关：true 才启动探活循环（默认 false）。
+    pub enabled: bool,
+    /// 探活周期（分钟，默认 10，下限 1）。
+    pub interval_minutes: u32,
+    /// 响应时间阈值（ms，超过视为不健康触发熔断；默认 5000，0=不按耗时熔断）。
+    pub rt_threshold_ms: u32,
+}
+
 /// 运行期配置。M0 阶段从环境变量加载（配套 `.env.example`）；
 /// 后续里程碑如需分层配置文件再行扩展。
 #[derive(Clone, Debug)]
@@ -45,6 +56,8 @@ pub struct Config {
     pub smtp: Option<SmtpConfig>,
     /// 月度毛利月报邮件 cron 配置。
     pub billing_email: BillingEmailConfig,
+    /// 渠道健康探活配置。
+    pub channel_health: ChannelHealthConfig,
 }
 
 impl Config {
@@ -73,6 +86,11 @@ impl Config {
                 day: env_u32("RR_BILLING_EMAIL_DAY", 1).clamp(1, 28),
                 hour: env_u32("RR_BILLING_EMAIL_HOUR", 9).min(23),
                 dry_run: env_bool("RR_BILLING_EMAIL_DRY_RUN"),
+            },
+            channel_health: ChannelHealthConfig {
+                enabled: env_bool("RR_CHANNEL_HEALTH_ENABLED"),
+                interval_minutes: env_u32("RR_CHANNEL_HEALTH_INTERVAL_MINUTES", 10).max(1),
+                rt_threshold_ms: env_u32("RR_CHANNEL_HEALTH_RT_THRESHOLD_MS", 5000),
             },
         }
     }

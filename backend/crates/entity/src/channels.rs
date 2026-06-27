@@ -21,6 +21,16 @@ pub struct Model {
     pub priority: i32,
     pub weight: i32,
     pub status: ChannelStatus,
+    /// 最近一次连通性测试的响应耗时（ms）；未测过为 None。
+    pub response_time: Option<i32>,
+    /// 最近一次测试时间。
+    pub test_time: Option<DateTimeWithTimeZone>,
+    /// 渠道测试默认模型（空时由 test 端点取该渠道 model_channels 首条）。
+    pub test_model: Option<String>,
+    /// 是否允许被自动禁用（健康探活/转发错误触发）。
+    pub auto_ban: bool,
+    /// 自动禁用原因（status=CircuitBroken 时填，便于排查）。
+    pub disabled_reason: Option<String>,
 }
 
 /// 渠道状态（强类型，映射 smallint）。

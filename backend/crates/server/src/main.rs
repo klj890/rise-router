@@ -37,9 +37,12 @@ async fn main() -> anyhow::Result<()> {
     let bind_addr = config.bind_addr.clone();
     let state = AppState::new(config, db);
 
-    // 后台任务：月度毛利月报邮件 cron（仅 DB 连通且 RR_BILLING_EMAIL_ENABLED=true 时进入循环）。
+    // 后台任务（仅 DB 连通时启动；各自的 enabled 开关在内部判定）。
     if state.db.is_some() {
+        // 月度毛利月报邮件 cron（RR_BILLING_EMAIL_ENABLED=true 时进入循环）。
         rise_billing::spawn_email_cron(state.clone());
+        // 渠道健康探活 + 被动恢复（RR_CHANNEL_HEALTH_ENABLED=true 时进入循环）。
+        rise_gateway::health::spawn_health_check(state.clone());
     }
 
     let app = build_router(state);

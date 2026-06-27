@@ -3,7 +3,9 @@
 //! 纯函数在 [`route`]（无 DB，单测覆盖）；[`resolve_route`] 是 DB 编排。
 //! 路由与定价完全分离：仅在 `models` 处相交，互不依赖。
 
+mod adapter;
 mod channel;
+pub mod health;
 mod model;
 mod model_channel;
 mod relay;
@@ -23,9 +25,9 @@ use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
 
 /// 已实现的协议族白名单。**新厂商若属已知协议族 = 纯配置接入**（建渠道选此值即可）；
-/// 全新协议族须先写适配器代码再加入此列表。渠道 CRUD 据此拒绝自由文本拼错。
-/// 目前 relay 仅按 OpenAI 风格转发，故只暴露 `openai_compatible`（覆盖绝大多数国产厂商）。
-pub const KNOWN_PROTOCOL_ADAPTERS: &[&str] = &["openai_compatible"];
+/// 全新协议族须先写适配器代码（`adapter/`）再加入此列表。渠道 CRUD 据此拒绝自由文本拼错。
+/// 必须与 [`adapter::adapter_for`] 的分支保持一致（白名单放行的协议族必须有适配器）。
+pub const KNOWN_PROTOCOL_ADAPTERS: &[&str] = &["openai_compatible", "anthropic", "gemini"];
 
 /// 给定模型 → 故障转移顺序的候选渠道（有效优先级/权重已算好）。
 pub async fn resolve_route(
@@ -81,6 +83,8 @@ pub fn routes() -> Router<AppState> {
                 .put(channel::update)
                 .delete(channel::delete),
         )
+        // 渠道连通性测试（真打上游，五层判定，写回测速）
+        .route("/channels/{id}/test", post(channel::test))
         // 模型目录管理 CRUD（admin 守卫）
         .route("/models", post(model::create).get(model::list))
         .route(
