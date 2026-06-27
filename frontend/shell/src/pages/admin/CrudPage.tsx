@@ -5,23 +5,32 @@ import {
   Modal,
   Form,
   Input,
-  InputNumber,
-  Select,
-  Switch,
   Popconfirm,
   Space,
   Typography,
   Alert,
   message,
-  DatePicker,
   Tag,
 } from 'antd'
-import { PlusOutlined, ReloadOutlined } from '@ant-design/icons'
-import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query'
+import { PlusOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
 import { api } from '../../api/client'
 import { useAuthStore } from '../../store/auth'
+import { PageHeader, SectionCard, StatusPill, FilterTabs, FormDrawer } from '../../components/ui'
+import type { FilterTabItem, PillTone } from '../../components/ui'
+import { toPayload, toFormValues, useResourceOptions, ResourceFormItems } from './resourceShared'
+
+/** 由状态值名推断药丸语义色（覆盖各资源 Enabled/Active/Listed/CircuitBroken… 词表）。 */
+export function statusTone(value: unknown): PillTone {
+  const v = String(value).toLowerCase()
+  if (/(enabled|active|listed|online|success|ready|true)/.test(v)) return 'success'
+  if (/(circuitbroken|broken|degraded|error|failed|banned|expired)/.test(v)) return 'danger'
+  if (/(maintenance|pending|queued|warning)/.test(v)) return 'warning'
+  if (/(disabled|delisted|suspended|inactive|paused|false)/.test(v)) return 'neutral'
+  return 'neutral'
+}
 
 export type FieldType =
   | 'text'
@@ -70,41 +79,6 @@ export interface ResourceDef {
 }
 
 type Row = Record<string, unknown>
-
-/** 把表单值转换为后端载荷：json 串→对象、dayjs→ISO、空值显式置 null（以支持"清空"）。 */
-function toPayload(fields: FieldDef[], values: Record<string, unknown>): Record<string, unknown> {
-  const out: Record<string, unknown> = {}
-  for (const f of fields) {
-    const v = values[f.name]
-    if (v === undefined || v === null || v === '') {
-      // 显式置 null（而非剔除键）：后端可清空字段（如 org.group_id 走 double_option）据此清除；
-      // 仅支持 None=不变 的字段会把 null 当 None 安全忽略。required 字段已被表单校验拦截，不会到此。
-      out[f.name] = null
-      continue
-    }
-    if (f.type === 'json') {
-      out[f.name] = JSON.parse(v as string) // 解析失败由调用方 catch → 提示
-    } else if (f.type === 'datetime') {
-      out[f.name] = (v as dayjs.Dayjs).toISOString()
-    } else {
-      out[f.name] = v
-    }
-  }
-  return out
-}
-
-/** 把记录转为表单初值：json→美化串、datetime→dayjs。 */
-function toFormValues(fields: FieldDef[], record: Row): Record<string, unknown> {
-  const out: Record<string, unknown> = {}
-  for (const f of fields) {
-    const v = record[f.name]
-    if (v === undefined || v === null) continue
-    if (f.type === 'json') out[f.name] = JSON.stringify(v, null, 2)
-    else if (f.type === 'datetime') out[f.name] = dayjs(v as string)
-    else out[f.name] = v
-  }
-  return out
-}
 
 function renderCell(f: FieldDef, value: unknown, optionMap: Map<string | number, string>): string {
   if (value === null || value === undefined) return '—'
@@ -156,6 +130,8 @@ export default function CrudPage({ resource, title }: { resource: ResourceDef; t
   const [editingId, setEditingId] = useState<number | null>(null)
   const [secretValue, setSecretValue] = useState<string | null>(null)
   const [actionModal, setActionModal] = useState<{ title: string; result: unknown } | null>(null)
+  const [search, setSearch] = useState('')
+  const [statusFilter, setStatusFilter] = useState('all')
 
   const listQuery = useQuery({
     queryKey: ['admin', resource.base],
@@ -163,34 +139,19 @@ export default function CrudPage({ resource, title }: { resource: ResourceDef; t
     enabled: !!adminToken,
   })
 
-  // 动态加载所有带 optionsLoader 字段的下拉项（FK 选择）。
-  const loaderFields = useMemo(
-    () => resource.fields.filter((f) => f.optionsLoader),
+  // 状态字段（若有）：用于顶部分段筛选与药丸渲染。
+  const statusField = useMemo(
+    () => resource.fields.find((f) => f.name === 'status' && f.type === 'select'),
     [resource.fields],
   )
-  const optionQueries = useQueries({
-    queries: loaderFields.map((f) => ({
-      queryKey: ['admin-options', resource.base, f.name],
-      queryFn: f.optionsLoader!,
-      staleTime: 30_000,
-      enabled: !!adminToken,
-    })),
-  })
-  const optionsByField = useMemo(() => {
-    const m: Record<string, FieldOption[]> = {}
-    loaderFields.forEach((f, i) => {
-      m[f.name] = (optionQueries[i].data as FieldOption[] | undefined) ?? f.options ?? []
-    })
-    resource.fields
-      .filter((f) => f.options && !f.optionsLoader)
-      .forEach((f) => {
-        m[f.name] = f.options!
-      })
-    return m
-    // 依赖用 dataUpdatedAt（数据刷新时变化的时间戳）而非 .data：对象 join 会被字符串化成
-    // '[object Object]'，条数不变时即便内容变了也不重算，导致 FK 选项/标签陈旧。
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loaderFields, optionQueries.map((q) => q.dataUpdatedAt).join(','), resource.fields])
+  // 列表内文本搜索的字段（inTable 的 text 类）。
+  const searchFields = useMemo(
+    () => resource.fields.filter((f) => f.inTable && (f.type === 'text' || f.type === 'textarea')).map((f) => f.name),
+    [resource.fields],
+  )
+
+  // 动态加载所有带 optionsLoader 字段的下拉项（FK 选择）。
+  const optionsByField = useResourceOptions(resource)
 
   const saveMutation = useMutation({
     mutationFn: async (payload: Record<string, unknown>) => {
@@ -279,7 +240,14 @@ export default function CrudPage({ resource, title }: { resource: ResourceDef; t
         title: f.label,
         dataIndex: f.name,
         key: f.name,
-        render: (v: unknown) => renderCell(f, v, optionMaps[f.name]),
+        render: (v: unknown) =>
+          f === statusField && v != null ? (
+            <StatusPill tone={statusTone(v)} dot>
+              {optionMaps[f.name]?.get(v as string | number) ?? String(v)}
+            </StatusPill>
+          ) : (
+            renderCell(f, v, optionMaps[f.name])
+          ),
       })),
     {
       title: '操作',
@@ -318,6 +286,33 @@ export default function CrudPage({ resource, title }: { resource: ResourceDef; t
     mode === 'create' ? f.inCreate !== false : f.inEdit !== false,
   )
 
+  // 客户端筛选：状态分段 + 文本搜索。
+  const allRows = listQuery.data ?? []
+  const filteredRows = useMemo(() => {
+    const kw = search.trim().toLowerCase()
+    return allRows.filter((r) => {
+      if (statusField && statusFilter !== 'all' && r[statusField.name] !== statusFilter) return false
+      if (kw && searchFields.length) {
+        return searchFields.some((name) => String(r[name] ?? '').toLowerCase().includes(kw))
+      }
+      return true
+    })
+  }, [allRows, search, statusFilter, statusField, searchFields])
+
+  // 状态分段项（含计数）。
+  const statusTabs: FilterTabItem[] = useMemo(() => {
+    if (!statusField) return []
+    const items: FilterTabItem[] = [{ key: 'all', label: '全部', count: allRows.length }]
+    for (const o of statusField.options ?? []) {
+      items.push({
+        key: String(o.value),
+        label: o.label,
+        count: allRows.filter((r) => r[statusField.name] === o.value).length,
+      })
+    }
+    return items
+  }, [statusField, allRows])
+
   if (!adminToken) {
     return (
       <Alert
@@ -331,24 +326,22 @@ export default function CrudPage({ resource, title }: { resource: ResourceDef; t
 
   return (
     <div>
-      <div
-        style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16, alignItems: 'center' }}
-      >
-        <Typography.Title level={4} style={{ margin: 0 }}>
-          {title}
-        </Typography.Title>
-        <Space>
-          <Button
-            icon={<ReloadOutlined />}
-            onClick={() => qc.invalidateQueries({ queryKey: ['admin', resource.base] })}
-          >
-            刷新
-          </Button>
-          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
-            新建
-          </Button>
-        </Space>
-      </div>
+      <PageHeader
+        title={title}
+        extra={
+          <Space>
+            <Button
+              icon={<ReloadOutlined />}
+              onClick={() => qc.invalidateQueries({ queryKey: ['admin', resource.base] })}
+            >
+              刷新
+            </Button>
+            <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+              新建
+            </Button>
+          </Space>
+        }
+      />
 
       {listQuery.isError && (
         <Alert
@@ -363,56 +356,57 @@ export default function CrudPage({ resource, title }: { resource: ResourceDef; t
         />
       )}
 
-      <Table<Row>
-        rowKey="id"
-        loading={listQuery.isLoading}
-        columns={columns}
-        dataSource={listQuery.data ?? []}
-        size="middle"
-        pagination={{ pageSize: 20, showSizeChanger: true }}
-        scroll={{ x: true }}
-      />
+      <SectionCard flush>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 12,
+            flexWrap: 'wrap',
+            padding: '14px 18px',
+            borderBottom: '1px solid var(--rr-border)',
+          }}
+        >
+          {statusTabs.length > 0 ? (
+            <FilterTabs items={statusTabs} value={statusFilter} onChange={setStatusFilter} />
+          ) : (
+            <span />
+          )}
+          {searchFields.length > 0 && (
+            <Input
+              allowClear
+              prefix={<SearchOutlined style={{ color: 'var(--rr-text-3)' }} />}
+              placeholder="搜索"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              style={{ width: 220 }}
+            />
+          )}
+        </div>
+        <Table<Row>
+          rowKey="id"
+          loading={listQuery.isLoading}
+          columns={columns}
+          dataSource={filteredRows}
+          size="middle"
+          pagination={{ pageSize: 20, showSizeChanger: true }}
+          scroll={{ x: true }}
+        />
+      </SectionCard>
 
-      <Modal
-        title={`${mode === 'create' ? '新建' : '编辑'} · ${title}`}
+      <FormDrawer
         open={open}
+        title={`${mode === 'create' ? '新建' : '编辑'} · ${title}`}
+        onClose={() => setOpen(false)}
         onOk={onSubmit}
-        confirmLoading={saveMutation.isPending}
-        onCancel={() => setOpen(false)}
-        destroyOnClose
-        width={640}
+        okLoading={saveMutation.isPending}
+        width={600}
       >
         <Form form={form} layout="vertical" preserve={false}>
-          {formFields.map((f) => (
-            <Form.Item
-              key={f.name}
-              name={f.name}
-              label={f.label}
-              extra={f.help}
-              valuePropName={f.type === 'switch' ? 'checked' : 'value'}
-              rules={f.required ? [{ required: true, message: `请填写${f.label}` }] : undefined}
-            >
-              {f.type === 'text' && <Input placeholder={f.placeholder} />}
-              {f.type === 'number' && <InputNumber style={{ width: '100%' }} />}
-              {f.type === 'textarea' && <Input.TextArea rows={2} placeholder={f.placeholder} />}
-              {f.type === 'json' && (
-                <Input.TextArea rows={5} placeholder={f.placeholder ?? '{ }'} style={{ fontFamily: 'monospace' }} />
-              )}
-              {f.type === 'switch' && <Switch />}
-              {f.type === 'datetime' && <DatePicker showTime style={{ width: '100%' }} />}
-              {f.type === 'select' && (
-                <Select
-                  allowClear
-                  showSearch
-                  optionFilterProp="label"
-                  options={optionsByField[f.name] ?? []}
-                  placeholder={f.placeholder}
-                />
-              )}
-            </Form.Item>
-          ))}
+          <ResourceFormItems fields={formFields} optionsByField={optionsByField} />
         </Form>
-      </Modal>
+      </FormDrawer>
 
       <Modal
         title={resource.secret?.label ?? '密钥'}

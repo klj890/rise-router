@@ -160,3 +160,6 @@ export const ADMIN_RESOURCES: AdminResourceEntry[] = [
   { key: 'organizations', title: '组织', section: 'identity', def: organizations },
   { key: 'api-keys', title: '密钥', section: 'identity', def: apiKeys },
 ]
+
+// 单独导出供 bespoke 页（渠道详情抽屉、密钥预算条）复用同一份字段定义。
+export const RESOURCE = { channels, models, modelChannels, groups, prices, discounts, organizations, apiKeys }
